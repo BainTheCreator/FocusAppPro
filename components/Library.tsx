@@ -121,7 +121,7 @@ export const Library = ({ onBack, onAddGoal, extraBottomPadding = 0 }: LibraryPr
   }, [searchQuery, selectedCategory, filterType]);
 
   return (
-    <View {...({ className: 'min-h-screen w-full bg-background' } as any)}>
+    <View {...({ className: 'min-h-screen w-full flex-1 bg-background' } as any)}>
       {/* Header */}
       <View {...({ className: 'w-full bg-gradient-primary p-4' } as any)}>
         <View {...({ className: 'w-full flex-row items-center justify-between mb-4' } as any)}>
@@ -153,9 +153,10 @@ export const Library = ({ onBack, onAddGoal, extraBottomPadding = 0 }: LibraryPr
       </View>
 
       <ScrollView
+        style={{ flex: 1 }}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingBottom: 24 + extraBottomPadding }}
         {...({ className: 'w-full px-4 -mt-2' } as any)}
-        showsVerticalScrollIndicator={false}
       >
         {/* Filters */}
         <Card {...({ className: 'w-full self-stretch rounded-2xl p-4 shadow-medium mb-4' } as any)}>
