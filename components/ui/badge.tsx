@@ -8,20 +8,20 @@ type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
 const baseContainer =
   'flex-row items-center rounded-full border px-2.5 py-0.5';
 
-// контейнерные классы по вариантам
+// контейнерные классы по вариантам (через дизайн-токены)
 const containerByVariant: Record<BadgeVariant, string> = {
-  default: 'bg-blue-600 border-transparent',
-  secondary: 'bg-slate-100 dark:bg-slate-800 border-transparent',
-  destructive: 'bg-rose-600 border-transparent',
-  outline: 'bg-transparent border-slate-300 dark:border-slate-700',
+  default: 'bg-primary border-transparent',         // #35D07F
+  secondary: 'bg-secondary border-transparent',     // тёмный серый из темы
+  destructive: 'bg-destructive border-transparent', // красный из темы
+  outline: 'bg-transparent border-border',          // системная граница
 };
 
-// цвет текста (в RN цвет не наследуется от контейнера)
+// цвет текста (в RN не наследуется от контейнера)
 const textByVariant: Record<BadgeVariant, string> = {
-  default: 'text-white',
-  secondary: 'text-slate-900 dark:text-slate-100',
-  destructive: 'text-white',
-  outline: 'text-slate-900 dark:text-slate-100',
+  default: 'text-primary-foreground',         // обычно #fff
+  secondary: 'text-secondary-foreground',
+  destructive: 'text-destructive-foreground',
+  outline: 'text-foreground',
 };
 
 export type BadgeProps = ViewProps & {
@@ -31,7 +31,6 @@ export type BadgeProps = ViewProps & {
   children?: React.ReactNode;
 };
 
-// сам компонент
 export function Badge({
   variant = 'default',
   className,
@@ -55,7 +54,7 @@ export function Badge({
   );
 }
 
-// helper как аналог cva — возвращает классы контейнера (как на вебе)
+// helper как аналог cva — возвращает классы контейнера
 export function badgeVariants(opts?: { variant?: BadgeVariant; className?: string }) {
   const v = opts?.variant ?? 'default';
   return cn(baseContainer, containerByVariant[v], opts?.className);

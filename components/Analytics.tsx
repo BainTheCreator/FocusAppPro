@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+// Analytics.tsx — React Native + NativeWind (зелёные акценты, табы снизу, история на полную ширину, данные из стора)
+import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, Pressable } from 'react-native';
-import { cssInterop } from 'nativewind';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import {
   ArrowLeft,
   TrendingUp,
@@ -12,67 +14,9 @@ import {
   Award,
   Brain,
 } from 'lucide-react-native';
+import { useGoals } from '@/state/goals';
 
-// Разрешаем className у LinearGradient
-cssInterop(LinearGradient, { className: 'style' });
-
-// ============ UI PRIMITIVES ============
-
-// Card
-const Card = ({ className, ...props }: any) => (
-  <View
-    className={`rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800 ${className || ''}`}
-    {...props}
-  />
-);
-
-// Button (variant: 'solid' | 'ghost' | 'outline')
-type ButtonProps = {
-  children?: React.ReactNode;
-  onPress?: () => void;
-  variant?: 'solid' | 'ghost' | 'outline';
-  size?: 'sm' | 'md';
-  className?: string;
-};
-const Button = ({ children, onPress, variant = 'solid', size = 'md', className }: ButtonProps) => {
-  const base = 'flex-row items-center justify-center rounded-xl';
-  const sizes = size === 'sm' ? 'px-3 py-2' : 'px-4 py-3';
-  const variants =
-    variant === 'ghost'
-      ? 'bg-transparent'
-      : variant === 'outline'
-      ? 'bg-transparent border border-slate-300 dark:border-slate-700'
-      : 'bg-blue-600';
-  return (
-    <Pressable onPress={onPress} className={`${base} ${sizes} ${variants} ${className || ''}`}>
-      {typeof children === 'string' ? (
-        <Text className={variant === 'solid' ? 'text-white font-medium' : 'text-slate-900 dark:text-slate-100 font-medium'}>
-          {children}
-        </Text>
-      ) : (
-        children
-      )}
-    </Pressable>
-  );
-};
-
-// Progress
-function Progress({ value = 0, color = '#2563eb', className }: { value: number; color?: string; className?: string }) {
-  const clamped = Math.max(0, Math.min(100, value));
-  return (
-    <View className={`h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden ${className || ''}`}>
-      <View style={{ width: `${clamped}%`, backgroundColor: color }} className="h-full rounded-full" />
-    </View>
-  );
-}
-
-// Градиенты используем напрямую (className работает через cssInterop)
-const GHeader = LinearGradient;
-const GCard = LinearGradient;
-
-// ============ SMALL PARTS ============
-
-type IconType = React.ComponentType<{ size?: number; color?: string }>;
+type Trend = 'up' | 'down' | 'neutral';
 
 const StatCard = ({
   icon: Icon,
@@ -81,137 +25,246 @@ const StatCard = ({
   change,
   trend,
 }: {
-  icon: IconType;
+  icon: React.ComponentType<any>;
   label: string;
   value: string;
   change?: string;
-  trend?: 'up' | 'down' | 'neutral';
+  trend?: Trend;
 }) => (
-  <Card className="p-4 shadow-md w-[48%]">
-    <View className="flex-row items-center justify-between mb-2">
-      <View className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/30 items-center justify-center">
-        <Icon size={20} color="#2563eb" />
+  <Card {...({ className: 'p-4 bg-gradient-card shadow-medium border-0' } as any)}>
+    <View {...({ className: 'flex-row items-center justify-between mb-2' } as any)}>
+      <View {...({ className: 'w-10 h-10 rounded-lg bg-primary/10 items-center justify-center mb-2' } as any)}>
+        <Icon color="#35D07F" size={20} />
       </View>
       {change ? (
         <Text
-          className={`text-xs font-medium ${
-            trend === 'up' ? 'text-emerald-600' : trend === 'down' ? 'text-rose-600' : 'text-slate-500 dark:text-slate-400'
-          }`}
+          {...({
+            className:
+              'text-xs font-medium ' +
+              (trend === 'up'
+                ? 'text-primary'
+                : trend === 'down'
+                ? 'text-red-400'
+                : 'text-muted-foreground'),
+          } as any)}
         >
           {change}
         </Text>
       ) : null}
     </View>
     <View>
-      <Text className="text-2xl font-bold text-slate-900 dark:text-slate-50 mb-1">{value}</Text>
-      <Text className="text-sm text-slate-500 dark:text-slate-400">{label}</Text>
+      <Text {...({ className: 'text-2xl font-bold text-foreground mb-1' } as any)}>{value}</Text>
+      <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>{label}</Text>
     </View>
   </Card>
 );
 
-const CategoryProgress = ({ category, progress, color }: { category: string; progress: number; color: string }) => (
-  <View className="mb-3">
-    <View className="flex-row justify-between mb-2">
-      <Text className="text-sm font-medium text-slate-900 dark:text-slate-100">{category}</Text>
-      <Text className="text-sm text-slate-500 dark:text-slate-400">{progress}%</Text>
+const CategoryProgress = ({
+  category,
+  progress,
+  color = 'bg-primary',
+}: {
+  category: string;
+  progress: number;
+  color?: string;
+}) => (
+  <View {...({ className: 'space-y-2' } as any)}>
+    <View {...({ className: 'flex-row justify-between' } as any)}>
+      <Text {...({ className: 'text-sm font-medium text-foreground' } as any)}>{category}</Text>
+      <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>{progress}%</Text>
     </View>
-    <Progress value={progress} color={color} />
+    <Progress value={progress} {...({ className: 'h-2', indicatorClassName: color } as any)} />
   </View>
 );
 
-const GoalHistory = ({ goal }: { goal: { title: string; icon: string; date: string; status: 'completed' | 'active' | 'paused' } }) => {
-  const badge =
+const GoalHistory = ({ goal }: { goal: any }) => {
+  const statusContainer =
     goal.status === 'completed'
-      ? { bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'Завершена' }
+      ? 'bg-primary/15'
       : goal.status === 'active'
-      ? { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Активна' }
-      : { bg: 'bg-slate-100', text: 'text-slate-700', label: 'На паузе' };
+      ? 'bg-white/10'
+      : 'bg-muted';
+  const statusText =
+    goal.status === 'completed'
+      ? 'text-primary'
+      : goal.status === 'active'
+      ? 'text-white'
+      : 'text-muted-foreground';
 
   return (
-    <Card className="p-3 shadow-sm">
-      <View className="flex-row items-center justify-between">
-        <View className="flex-row items-center">
-          <Text className="text-lg mr-3">{goal.icon}</Text>
+    <Card {...({ className: 'p-4 bg-card shadow-soft border-0' } as any)}>
+      <View {...({ className: 'flex-row items-center justify-between' } as any)}>
+        <View {...({ className: 'flex-row items-center space-x-3' } as any)}>
+          <Text {...({ className: 'text-lg' } as any)}>{goal.icon}</Text>
           <View>
-            <Text className="font-medium text-sm text-slate-900 dark:text-slate-100">{goal.title}</Text>
-            <Text className="text-xs text-slate-500 dark:text-slate-400">{goal.date}</Text>
+            <Text {...({ className: 'font-medium text-sm text-foreground' } as any)}>{goal.title}</Text>
+            <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>{goal._date}</Text>
           </View>
         </View>
-        <View className={`px-2 py-1 rounded-full ${badge.bg}`}>
-          <Text className={`text-xs font-medium ${badge.text}`}>{badge.label}</Text>
+        <View {...({ className: `px-2 py-1 rounded-full ${statusContainer}` } as any)}>
+          <Text {...({ className: `text-xs font-medium ${statusText}` } as any)}>
+            {goal.status === 'completed' ? 'Завершена' : goal.status === 'active' ? 'Активна' : 'На паузе'}
+          </Text>
         </View>
       </View>
     </Card>
   );
 };
 
-// ============ MAIN SCREEN ============
+interface AnalyticsProps {
+  onBack: () => void;
+  extraBottomPadding?: number;
+}
 
-export function Analytics({ onBack }: { onBack: () => void }) {
+export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
+  const { goals } = useGoals();
 
-  const mockStats = {
-    totalGoals: 24,
-    completedGoals: 8,
-    activeGoals: 5,
-    averageTime: '3.2 мес',
-    successRate: 75,
-    currentStreak: 12,
-  };
+  const totalGoals = goals.length;
+  const completedGoals = goals.filter((g) => g.status === 'completed').length;
+  const activeGoals = goals.filter((g) => g.status === 'active').length;
+  const successRate = totalGoals ? Math.round((completedGoals / totalGoals) * 100) : 0;
 
-  const categoryData = [
-    { category: 'Навыки', progress: 85, color: '#3b82f6' },
-    { category: 'Состояние', progress: 65, color: '#22c55e' },
-    { category: 'Капитал', progress: 45, color: '#eab308' },
-    { category: 'Семья', progress: 90, color: '#ec4899' },
-    { category: 'Мышление', progress: 70, color: '#a855f7' },
-  ];
+  const categoryData = useMemo(() => {
+    const map = new Map<string, { sum: number; cnt: number }>();
+    goals.forEach((g) => {
+      const key = g.category || 'Прочее';
+      const rec = map.get(key) ?? { sum: 0, cnt: 0 };
+      rec.sum += g.progress || 0;
+      rec.cnt += 1;
+      map.set(key, rec);
+    });
+    const arr = Array.from(map.entries()).map(([category, { sum, cnt }]) => ({
+      category,
+      progress: cnt ? Math.round(sum / cnt) : 0,
+    }));
+    return arr.map((it, i) => ({
+      ...it,
+      color: ['bg-primary', 'bg-primary/90', 'bg-primary/80', 'bg-primary/70', 'bg-primary/60'][i % 5],
+    }));
+  }, [goals]);
 
-  const recentGoals = [
-    { id: 1, title: 'Изучить React', icon: '💻', date: '15 дек', status: 'completed' as const },
-    { id: 2, title: 'Пробежать 10км', icon: '🏃‍♂️', date: '10 дек', status: 'completed' as const },
-    { id: 3, title: 'Прочитать книгу', icon: '📚', date: '5 дек', status: 'active' as const },
-    { id: 4, title: 'Выучить 100 слов', icon: '🗣️', date: '1 дек', status: 'paused' as const },
-  ];
+  const recentGoals = useMemo(() => {
+    const fmt = (ts: number) => {
+      const d = new Date(ts);
+      return `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1)
+        .toString()
+        .padStart(2, '0')}.${d.getFullYear().toString().slice(-2)}`;
+    };
+    return [...goals]
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, 10)
+      .map((g) => ({ ...g, _date: fmt(g.createdAt) }));
+  }, [goals]);
+
+  const TABS_HEIGHT = 60;
 
   return (
-    <View className="flex-1 bg-slate-50 dark:bg-slate-950">
+    <View {...({ className: 'flex-1 bg-background' } as any)}>
       {/* Header */}
-      <GHeader colors={['#4f46e5', '#7c3aed']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} className="px-4 pt-12 pb-4">
-        <View className="flex-row items-center justify-between mb-4">
-          <Button variant="ghost" size="sm" onPress={onBack} className="bg-white/0">
-            <ArrowLeft size={18} color="#fff" />
-          </Button>
-          <Text className="text-white font-semibold">Аналитика</Text>
-          <Button variant="ghost" size="sm" className="bg-white/0">
-            <Calendar size={18} color="#fff" />
+      <View {...({ className: 'bg-gradient-primary p-4' } as any)}>
+        <View {...({ className: 'flex-row items-center justify-between mb-4' } as any)}>
+          <Button variant="ghost" size="sm" onPress={onBack} {...({ className: 'text-white hover:bg-white/10' } as any)}>
+            <ArrowLeft size={16} color="white" />
           </Button>
         </View>
 
-        <View className="items-center">
-          <Text className="text-2xl font-bold text-white mb-1">Ваш прогресс</Text>
-          <Text className="text-white/80">За последние 30 дней</Text>
-        </View>
-      </GHeader>
+        {activeTab === 'overview' && (
+          <View {...({ className: 'items-center' } as any)}>
+            <Text {...({ className: 'text-2xl font-bold text-white mb-1' } as any)}>Ваш прогресс</Text>
+            <Text {...({ className: 'text-white/80' } as any)}>По вашим целям</Text>
+          </View>
+        )}
+      </View>
 
-      {/* Tabs */}
-      <View className="px-4 -mt-3">
-        <View className="flex-row bg-slate-200/60 dark:bg-slate-800 rounded-xl p-1 mb-3">
+      {/* Content */}
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 24 + TABS_HEIGHT + extraBottomPadding }}
+        {...({ className: 'px-4 -mt-2' } as any)}
+        showsVerticalScrollIndicator={false}
+      >
+        {activeTab === 'overview' ? (
+          <>
+            {/* Quick Stats */}
+            <View {...({ className: 'bg-card rounded-2xl p-4 shadow-medium mb-6' } as any)}>
+              <View {...({ className: 'grid grid-cols-2 gap-4 mb-4' } as any)}>
+                <StatCard icon={Target} label="Всего целей" value={String(totalGoals)} />
+                <StatCard icon={Award} label="Завершено" value={String(completedGoals)} />
+              </View>
+              <View {...({ className: 'grid grid-cols-2 gap-4' } as any)}>
+                <StatCard
+                  icon={Zap}
+                  label="Успешность"
+                  value={`${successRate}%`}
+                  change={successRate ? '+5%' : undefined}
+                  trend={successRate ? 'up' : 'neutral'}
+                />
+                <StatCard icon={Clock} label="Активные" value={`${activeGoals}`} />
+              </View>
+            </View>
+
+            {/* Progress by Category */}
+            <Card {...({ className: 'p-4 shadow-medium border-0 mb-6' } as any)}>
+              <View {...({ className: 'flex-row items-center mb-4' } as any)}>
+                <TrendingUp color="#35D07F" size={16} />
+                <Text {...({ className: 'font-semibold text-foreground ml-2' } as any)}>Прогресс по сферам</Text>
+              </View>
+              <View {...({ className: 'space-y-4' } as any)}>
+                {categoryData.map((item) => (
+                  <CategoryProgress key={item.category} category={item.category} progress={item.progress} color={item.color} />
+                ))}
+              </View>
+            </Card>
+
+            {/* AI Insights */}
+            <Card {...({ className: 'p-4 bg-gradient-primary text-white shadow-medium border-0 mb-6' } as any)}>
+              <View {...({ className: 'flex-row items-center mb-4' } as any)}>
+                <Brain size={20} color="white" />
+                <Text {...({ className: 'font-semibold text-white ml-2' } as any)}>AI Инсайты</Text>
+              </View>
+              <View {...({ className: 'space-y-2' } as any)}>
+                <Text {...({ className: 'text-sm text-white' } as any)}>🎯 Сделайте фокус на сферах с низким прогрессом для быстрого роста.</Text>
+                <Text {...({ className: 'text-sm text-white' } as any)}>⚡ Маленькие ежедневные шаги ускоряют завершение целей.</Text>
+              </View>
+            </Card>
+          </>
+        ) : (
+          <>
+            {/* Recent Goals */}
+            <View {...({ className: 'space-y-3' } as any)}>
+              {recentGoals.map((goal) => (
+                <GoalHistory key={goal.id} goal={goal} />
+              ))}
+              {recentGoals.length === 0 && <Text {...({ className: 'text-center text-muted-foreground' } as any)}>Пока нет целей</Text>}
+            </View>
+          </>
+        )}
+      </ScrollView>
+
+      {/* Bottom Tabs */}
+      <View style={{ paddingBottom: 12, paddingTop: 8 }} {...({ className: 'px-4 border-t border-border bg-card/95' } as any)}>
+        <View {...({ className: 'flex-row bg-muted rounded-xl p-1' } as any)}>
           {[
             { key: 'overview', label: 'Обзор' },
             { key: 'history', label: 'История' },
           ].map((tab) => {
-            const active = activeTab === tab.key;
+            const active = activeTab === (tab.key as any);
             return (
               <Pressable
                 key={tab.key}
-                onPress={() => setActiveTab(tab.key as typeof activeTab)}
-                className={`flex-1 py-2 px-3 rounded-lg ${active ? 'bg-white dark:bg-slate-900' : ''}`}
+                onPress={() => setActiveTab(tab.key as 'overview' | 'history')}
+                {...({
+                  className:
+                    'flex-1 rounded-lg items-center justify-center py-2 px-3 transition-all ' +
+                    (active ? 'bg-primary/15 border border-primary/30' : 'bg-transparent'),
+                } as any)}
               >
                 <Text
-                  className={`text-center text-sm font-medium ${
-                    active ? 'text-slate-900 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'
-                  }`}
+                  {...({
+                    className:
+                      'text-sm font-medium ' +
+                      (active ? 'text-primary' : 'text-muted-foreground'),
+                  } as any)}
                 >
                   {tab.label}
                 </Text>
@@ -220,64 +273,6 @@ export function Analytics({ onBack }: { onBack: () => void }) {
           })}
         </View>
       </View>
-
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}>
-        {activeTab === 'overview' ? (
-          <>
-            {/* Quick Stats */}
-            <View className="bg-white dark:bg-slate-900 rounded-2xl p-4 shadow-md mb-4">
-              <View className="flex-row justify-between mb-4">
-                <StatCard icon={Target as IconType} label="Всего целей" value={String(mockStats.totalGoals)} change="+3 за месяц" trend="up" />
-                <StatCard icon={Award as IconType} label="Завершено" value={String(mockStats.completedGoals)} change="+2 за месяц" trend="up" />
-              </View>
-              <View className="flex-row justify-between">
-                <StatCard icon={Zap as IconType} label="Успешность" value={`${mockStats.successRate}%`} change="+5%" trend="up" />
-                <StatCard icon={Clock as IconType} label="Серия" value={`${mockStats.currentStreak} дней`} change="Новый рекорд!" trend="up" />
-              </View>
-            </View>
-
-            {/* Progress by Category */}
-            <Card className="p-4 shadow-md mb-4">
-              <View className="flex-row items-center mb-4">
-                <TrendingUp size={16} color="#0f172a" />
-                <Text className="font-semibold ml-2 text-slate-900 dark:text-slate-100">Прогресс по сферам</Text>
-              </View>
-              <View>
-                {categoryData.map((item) => (
-                  <CategoryProgress key={item.category} category={item.category} progress={item.progress} color={item.color} />
-                ))}
-              </View>
-            </Card>
-
-            {/* AI Insights */}
-            <GCard colors={['#4f46e5', '#7c3aed']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} className="p-4 rounded-2xl shadow-md mb-4">
-              <View className="flex-row items-center mb-3">
-                <Brain size={20} color="#fff" />
-                <Text className="font-semibold text-white ml-2">AI Инсайты</Text>
-              </View>
-              <View>
-                <Text className="text-white/90 text-sm">🎯 Вы отлично справляетесь с целями в сфере "Навыки" — 85% прогресс!</Text>
-                <Text className="text-white/90 text-sm">⚡ Рекомендуем больше внимания уделить сфере "Капитал"</Text>
-                <Text className="text-white/90 text-sm">🔥 Ваша серия из 12 дней — отличный результат!</Text>
-              </View>
-            </GCard>
-          </>
-        ) : (
-          <>
-            <Text className="font-semibold text-slate-900 dark:text-slate-100 mb-3">Последние цели</Text>
-            <View>
-              {recentGoals.map((goal) => (
-                <GoalHistory key={goal.id} goal={goal} />
-              ))}
-            </View>
-            <View className="mt-6 items-center">
-              <Button variant="outline" className="rounded-2xl">
-                <Text className="text-slate-900 dark:text-slate-100 font-medium">Показать все цели</Text>
-              </Button>
-            </View>
-          </>
-        )}
-      </ScrollView>
     </View>
   );
-}
+};
