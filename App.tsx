@@ -1,3 +1,4 @@
+// App.tsx
 import 'react-native-gesture-handler';
 import React, { useEffect, useState } from 'react';
 import { AppState, View, Pressable, Text } from 'react-native';
@@ -14,25 +15,35 @@ import { Library } from '@/components/Library';
 import { Analytics } from '@/components/Analytics';
 import { Premium } from '@/components/Premium';
 import { Teams } from '@/components/Teams';
+import { Login } from '@/components/Login';
+import { Profile } from '@/components/Profile';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
 
-import { Home, BookOpen, TrendingUp, Crown, Users } from 'lucide-react-native';
+import { Home, TrendingUp, Crown, Users, User2 } from 'lucide-react-native';
 import { GoalsProvider, useGoals } from '@/state/goals';
 import './global.css';
+import { loginWithTelegram } from './lib/hooks/useTelegramLogin';
+import { supabase } from './lib/supabase';
+import { testOpenTelegramPage } from './auth/testOpenTelegramPage';
 
 type Screen =
   | 'onboarding'
+  | 'login'
   | 'dashboard'
   | 'create-goal'
   | 'library'
   | 'analytics'
   | 'teams'
-  | 'premium';
+  | 'premium'
+  | 'profile';
+
+type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'email';
 
 const queryClient = new QueryClient();
 const ONBOARDING_KEY = '@seen_onboarding_v1';
+const FORCE_LOGIN = false;
 
 function useReactQueryFocus() {
   useEffect(() => {
@@ -54,8 +65,8 @@ function BottomTabs({ current, onChange }: BottomTabsProps) {
     { key: 'dashboard' as Screen, label: 'Главная', Icon: Home },
     { key: 'analytics' as Screen, label: 'Статистика', Icon: TrendingUp },
     { key: 'teams' as Screen, label: 'Команды', Icon: Users },
-    { key: 'library' as Screen, label: 'Библиотека', Icon: BookOpen },
     { key: 'premium' as Screen, label: 'Магазин', Icon: Crown },
+    { key: 'profile' as Screen, label: 'Профиль', Icon: User2 },
   ];
   return (
     <View
@@ -96,29 +107,73 @@ function BottomTabs({ current, onChange }: BottomTabsProps) {
 function AppShell() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('onboarding');
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const [isAuthed, setIsAuthed] = useState(false);
   const [booted, setBooted] = useState(false);
   const { addGoal, addFromTemplate } = useGoals();
 
-  // Загружаем флаг онбординга из AsyncStorage один раз при старте
+  // Старт: читаем онбординг и текущую сессию
   useEffect(() => {
     (async () => {
       try {
-        const v = await AsyncStorage.getItem(ONBOARDING_KEY);
-        const seen = v === '1';
+        const [onb, sess] = await Promise.all([
+          AsyncStorage.getItem(ONBOARDING_KEY),
+          supabase.auth.getSession(),
+        ]);
+        const seen = onb === '1';
+        const authed = !!sess.data.session;
+
         setHasSeenOnboarding(seen);
-        setCurrentScreen(seen ? 'dashboard' : 'onboarding');
+        setIsAuthed(authed);
+
+        let initial: Screen;
+        if (FORCE_LOGIN) initial = 'login';
+        else if (!seen) initial = 'onboarding';
+        else if (!authed) initial = 'login';
+        else initial = 'dashboard';
+
+        setCurrentScreen(initial);
       } catch {
         setHasSeenOnboarding(false);
-        setCurrentScreen('onboarding');
+        setIsAuthed(false);
+        setCurrentScreen(FORCE_LOGIN ? 'login' : 'onboarding');
       } finally {
         setBooted(true);
       }
     })();
+
+    // Подписка на изменения авторизации
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      setIsAuthed(!!session);
+      if (event === 'SIGNED_IN') {
+        setCurrentScreen('dashboard');
+      }
+      if (event === 'SIGNED_OUT') {
+        setCurrentScreen('login');
+      }
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
+
+  // Если не авторизован — держим только onboarding/login
+  useEffect(() => {
+    if (!booted) return;
+    if (!isAuthed && currentScreen !== 'onboarding' && currentScreen !== 'login') {
+      setCurrentScreen('login');
+    }
+  }, [booted, isAuthed, currentScreen]);
+
+  // Если авторизовались, а экран всё ещё login — переходим на дашборд
+  useEffect(() => {
+    if (!booted) return;
+    if (isAuthed && currentScreen === 'login') {
+      setCurrentScreen('dashboard');
+    }
+  }, [booted, isAuthed, currentScreen]);
 
   const showTabs =
     !(currentScreen === 'onboarding' && !hasSeenOnboarding) &&
-    currentScreen !== 'create-goal';
+    currentScreen !== 'create-goal' &&
+    currentScreen !== 'login';
 
   const extraBottomPadding = showTabs ? 100 : 0;
 
@@ -127,7 +182,7 @@ function AppShell() {
     try {
       await AsyncStorage.setItem(ONBOARDING_KEY, '1');
     } catch {}
-    setCurrentScreen('dashboard');
+    setCurrentScreen(isAuthed ? 'dashboard' : 'login');
   };
 
   const handleCreateGoal = () => setCurrentScreen('create-goal');
@@ -139,7 +194,37 @@ function AppShell() {
 
   const handleBack = () => setCurrentScreen('dashboard');
 
-  // Простой сплэш, пока читаем флаг из хранилища
+  // Логин с провайдерами
+  const handleLoginWith = async (provider: Provider) => {
+    if (provider === 'qr') {
+      try {
+        await testOpenTelegramPage();
+      } catch (e) {
+        console.warn('Test open error', e);
+      }
+      return;
+    }
+    if (provider === 'telegram') {
+      try {
+        // Флоу через бота: после успешного обмена supabase.auth.setSession вызовет SIGNED_IN
+        await loginWithTelegram();
+        // Не переключаем экран вручную — навигацию делает onAuthStateChange(SIGNED_IN)
+      } catch (e) {
+        console.warn('Ошибка входа через Telegram', e);
+      }
+      return;
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch {}
+    setIsAuthed(false);
+    setCurrentScreen('login');
+  };
+
+  // Сплэш
   if (!booted) {
     return (
       <SafeAreaView style={{ flex: 1 }} dataSet={{ theme: 'dark' }} {...({ className: 'bg-background items-center justify-center' } as any)}>
@@ -148,6 +233,8 @@ function AppShell() {
       </SafeAreaView>
     );
   }
+
+  const loginOnSkip = hasSeenOnboarding ? undefined : () => setCurrentScreen('onboarding');
 
   return (
     <SafeAreaView
@@ -159,6 +246,8 @@ function AppShell() {
       <View {...({ className: 'flex-1 bg-background' } as any)}>
         {currentScreen === 'onboarding' && !hasSeenOnboarding ? (
           <Onboarding onComplete={handleOnboardingComplete} />
+        ) : currentScreen === 'login' ? (
+          <Login onLoginWith={handleLoginWith} onSkip={loginOnSkip} />
         ) : currentScreen === 'dashboard' ? (
           <Dashboard
             onCreateGoal={handleCreateGoal}
@@ -188,6 +277,8 @@ function AppShell() {
             }}
             extraBottomPadding={extraBottomPadding !== 0 ? extraBottomPadding - 100 : 0}
           />
+        ) : currentScreen === 'profile' ? (
+          <Profile onLogout={handleLogout} extraBottomPadding={extraBottomPadding} />
         ) : null}
       </View>
 

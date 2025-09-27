@@ -1,22 +1,24 @@
-// Analytics.tsx — React Native + NativeWind (зелёные акценты, табы снизу, история на полную ширину, данные из стора)
-import React, { useMemo, useState } from 'react';
+// Analytics.tsx — данные из БД (React Query + Realtime), история с датами: создана / активность / завершена
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, Pressable } from 'react-native';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
 import {
   ArrowLeft,
-  TrendingUp,
-  Target,
+  Target as TargetIcon,
   Clock,
   Zap,
   Calendar,
   Award,
   Brain,
+  RefreshCw,
 } from 'lucide-react-native';
-import { useGoals } from '@/state/goals';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchGoals, type UiGoal } from '@/lib/api/goals';
+import { supabase } from '@/lib/supabase';
 
 type Trend = 'up' | 'down' | 'neutral';
+const PRIMARY = '#35D07F';
 
 const StatCard = ({
   icon: Icon,
@@ -34,7 +36,7 @@ const StatCard = ({
   <Card {...({ className: 'p-4 bg-gradient-card shadow-medium border-0' } as any)}>
     <View {...({ className: 'flex-row items-center justify-between mb-2' } as any)}>
       <View {...({ className: 'w-10 h-10 rounded-lg bg-primary/10 items-center justify-center mb-2' } as any)}>
-        <Icon color="#35D07F" size={20} />
+        <Icon color={PRIMARY} size={20} />
       </View>
       {change ? (
         <Text
@@ -59,57 +61,44 @@ const StatCard = ({
   </Card>
 );
 
-const CategoryProgress = ({
-  category,
-  progress,
-  color = 'bg-primary',
-}: {
-  category: string;
-  progress: number;
-  color?: string;
-}) => (
-  <View {...({ className: 'space-y-2' } as any)}>
-    <View {...({ className: 'flex-row justify-between' } as any)}>
-      <Text {...({ className: 'text-sm font-medium text-foreground' } as any)}>{category}</Text>
-      <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>{progress}%</Text>
-    </View>
-    <Progress value={progress} {...({ className: 'h-2', indicatorClassName: color } as any)} />
-  </View>
-);
-
-const GoalHistory = ({ goal }: { goal: any }) => {
-  const statusContainer =
-    goal.status === 'completed'
-      ? 'bg-primary/15'
-      : goal.status === 'active'
-      ? 'bg-white/10'
-      : 'bg-muted';
-  const statusText =
-    goal.status === 'completed'
-      ? 'text-primary'
-      : goal.status === 'active'
-      ? 'text-white'
-      : 'text-muted-foreground';
-
-  return (
-    <Card {...({ className: 'p-4 bg-card shadow-soft border-0' } as any)}>
-      <View {...({ className: 'flex-row items-center justify-between' } as any)}>
-        <View {...({ className: 'flex-row items-center space-x-3' } as any)}>
-          <Text {...({ className: 'text-lg' } as any)}>{goal.icon}</Text>
-          <View>
-            <Text {...({ className: 'font-medium text-sm text-foreground' } as any)}>{goal.title}</Text>
-            <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>{goal._date}</Text>
-          </View>
-        </View>
-        <View {...({ className: `px-2 py-1 rounded-full ${statusContainer}` } as any)}>
-          <Text {...({ className: `text-xs font-medium ${statusText}` } as any)}>
-            {goal.status === 'completed' ? 'Завершена' : goal.status === 'active' ? 'Активна' : 'На паузе'}
-          </Text>
-        </View>
-      </View>
-    </Card>
-  );
+const fmt = (ts?: number | null) => {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yy = String(d.getFullYear()).slice(-2);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}.${mm}.${yy} ${hh}:${mi}`;
 };
+
+const HistoryItem = ({ g }: { g: UiGoal }) => (
+  <Card {...({ className: 'p-4 bg-card shadow-soft border-0' } as any)}>
+    <View {...({ className: 'flex-row items-center justify-between mb-2' } as any)}>
+      <View {...({ className: 'flex-row items-center gap-3' } as any)}>
+        <Text {...({ className: 'text-lg' } as any)}>{g.icon}</Text>
+        <Text {...({ className: 'font-medium text-sm text-foreground' } as any)}>{g.title}</Text>
+      </View>
+      <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>
+        {g.status === 'completed' ? 'Завершена' : g.status === 'paused' ? 'На паузе' : 'Активна'}
+      </Text>
+    </View>
+    <View {...({ className: 'gap-2' } as any)}>
+      <View {...({ className: 'flex-row items-center gap-2' } as any)}>
+        <Calendar size={14} color="#9CA3AF" />
+        <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>Создана: {fmt(g.createdAt)}</Text>
+      </View>
+      <View {...({ className: 'flex-row items-center gap-2' } as any)}>
+        <Zap size={14} color="#9CA3AF" />
+        <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>Активность: {fmt(g.lastActivityAt)}</Text>
+      </View>
+      <View {...({ className: 'flex-row items-center gap-2' } as any)}>
+        <Award size={14} color="#9CA3AF" />
+        <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>Завершена: {fmt(g.completedAt)}</Text>
+      </View>
+    </View>
+  </Card>
+);
 
 interface AnalyticsProps {
   onBack: () => void;
@@ -118,43 +107,45 @@ interface AnalyticsProps {
 
 export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
-  const { goals } = useGoals();
+  const qc = useQueryClient();
 
+  // Список целей из БД
+  const { data: goals = [], isFetching, refetch } = useQuery({
+    queryKey: ['goals'],
+    queryFn: fetchGoals,
+    staleTime: 10_000,
+  });
+
+  // Realtime: инвалидируем, если что-то поменялось
+  useEffect(() => {
+    const ch1 = supabase
+      .channel('rt:user_targets')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_targets' }, () => {
+        qc.invalidateQueries({ queryKey: ['goals'] });
+      })
+      .subscribe();
+    const ch2 = supabase
+      .channel('rt:target_target')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'target_target' }, () => {
+        qc.invalidateQueries({ queryKey: ['goals'] });
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch1);
+      supabase.removeChannel(ch2);
+    };
+  }, [qc]);
+
+  // Быстрые метрики
   const totalGoals = goals.length;
   const completedGoals = goals.filter((g) => g.status === 'completed').length;
   const activeGoals = goals.filter((g) => g.status === 'active').length;
   const successRate = totalGoals ? Math.round((completedGoals / totalGoals) * 100) : 0;
 
-  const categoryData = useMemo(() => {
-    const map = new Map<string, { sum: number; cnt: number }>();
-    goals.forEach((g) => {
-      const key = g.category || 'Прочее';
-      const rec = map.get(key) ?? { sum: 0, cnt: 0 };
-      rec.sum += g.progress || 0;
-      rec.cnt += 1;
-      map.set(key, rec);
-    });
-    const arr = Array.from(map.entries()).map(([category, { sum, cnt }]) => ({
-      category,
-      progress: cnt ? Math.round(sum / cnt) : 0,
-    }));
-    return arr.map((it, i) => ({
-      ...it,
-      color: ['bg-primary', 'bg-primary/90', 'bg-primary/80', 'bg-primary/70', 'bg-primary/60'][i % 5],
-    }));
-  }, [goals]);
-
+  // История: сортируем по последней активности, потом по дате создания
   const recentGoals = useMemo(() => {
-    const fmt = (ts: number) => {
-      const d = new Date(ts);
-      return `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1)
-        .toString()
-        .padStart(2, '0')}.${d.getFullYear().toString().slice(-2)}`;
-    };
-    return [...goals]
-      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-      .slice(0, 10)
-      .map((g) => ({ ...g, _date: fmt(g.createdAt) }));
+    const sortKey = (x: UiGoal) => x.lastActivityAt ?? x.createdAt ?? 0;
+    return [...goals].sort((a, b) => sortKey(b) - sortKey(a)).slice(0, 10);
   }, [goals]);
 
   const TABS_HEIGHT = 60;
@@ -167,6 +158,10 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
           <Button variant="ghost" size="sm" onPress={onBack} {...({ className: 'text-white hover:bg-white/10' } as any)}>
             <ArrowLeft size={16} color="white" />
           </Button>
+          <Pressable onPress={() => refetch()} {...({ className: 'flex-row items-center gap-2 px-3 py-2 rounded-lg bg-white/10 active:opacity-80' } as any)}>
+            <RefreshCw size={14} color="#fff" />
+            <Text {...({ className: 'text-white text-xs' } as any)}>{isFetching ? 'Обновляем...' : 'Обновить'}</Text>
+          </Pressable>
         </View>
 
         {activeTab === 'overview' && (
@@ -188,7 +183,7 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
             {/* Quick Stats */}
             <View {...({ className: 'bg-card rounded-2xl p-4 shadow-medium mb-6' } as any)}>
               <View {...({ className: 'grid grid-cols-2 gap-4 mb-4' } as any)}>
-                <StatCard icon={Target} label="Всего целей" value={String(totalGoals)} />
+                <StatCard icon={TargetIcon} label="Всего целей" value={String(totalGoals)} />
                 <StatCard icon={Award} label="Завершено" value={String(completedGoals)} />
               </View>
               <View {...({ className: 'grid grid-cols-2 gap-4' } as any)}>
@@ -203,19 +198,6 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
               </View>
             </View>
 
-            {/* Progress by Category */}
-            <Card {...({ className: 'p-4 shadow-medium border-0 mb-6' } as any)}>
-              <View {...({ className: 'flex-row items-center mb-4' } as any)}>
-                <TrendingUp color="#35D07F" size={16} />
-                <Text {...({ className: 'font-semibold text-foreground ml-2' } as any)}>Прогресс по сферам</Text>
-              </View>
-              <View {...({ className: 'space-y-4' } as any)}>
-                {categoryData.map((item) => (
-                  <CategoryProgress key={item.category} category={item.category} progress={item.progress} color={item.color} />
-                ))}
-              </View>
-            </Card>
-
             {/* AI Insights */}
             <Card {...({ className: 'p-4 bg-gradient-primary text-white shadow-medium border-0 mb-6' } as any)}>
               <View {...({ className: 'flex-row items-center mb-4' } as any)}>
@@ -223,19 +205,21 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
                 <Text {...({ className: 'font-semibold text-white ml-2' } as any)}>AI Инсайты</Text>
               </View>
               <View {...({ className: 'space-y-2' } as any)}>
-                <Text {...({ className: 'text-sm text-white' } as any)}>🎯 Сделайте фокус на сферах с низким прогрессом для быстрого роста.</Text>
-                <Text {...({ className: 'text-sm text-white' } as any)}>⚡ Маленькие ежедневные шаги ускоряют завершение целей.</Text>
+                <Text {...({ className: 'text-sm text-white' } as any)}>🎯 Завершайте цели с высоким прогрессом — это быстрые победы.</Text>
+                <Text {...({ className: 'text-sm text-white' } as any)}>⚡ Маленькие шаги каждый день повышают успешность.</Text>
               </View>
             </Card>
           </>
         ) : (
           <>
-            {/* Recent Goals */}
+            {/* History */}
             <View {...({ className: 'space-y-3' } as any)}>
-              {recentGoals.map((goal) => (
-                <GoalHistory key={goal.id} goal={goal} />
+              {recentGoals.map((g) => (
+                <HistoryItem key={g.id} g={g} />
               ))}
-              {recentGoals.length === 0 && <Text {...({ className: 'text-center text-muted-foreground' } as any)}>Пока нет целей</Text>}
+              {recentGoals.length === 0 && (
+                <Text {...({ className: 'text-center text-muted-foreground' } as any)}>Пока нет целей</Text>
+              )}
             </View>
           </>
         )}

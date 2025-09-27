@@ -2,6 +2,7 @@
   "expo": {
     "name": "FocusAppPro",
     "slug": "FocusAppPro",
+    "scheme": "goalsapp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -22,15 +23,20 @@
       },
       "edgeToEdgeEnabled": true
     },
-    "expo": {
-      "androidStatusBar": {
-        "translucent": true,
-        "backgroundColor": "transparent",
-        "barStyle": "light-content"
-      }
+    "androidStatusBar": {
+      "translucent": true,
+      "backgroundColor": "transparent",
+      "barStyle": "light-content"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-web-browser"
+    ],
+    "extra": {
+      "EXPO_PUBLIC_SUPABASE_URL": "https://vcptshxtznnmjvrspztp.supabase.co",
+      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_08-vBXg4aJ-ck7pBR_jZ5w_aDcAHwCx"
     }
   }
 }
