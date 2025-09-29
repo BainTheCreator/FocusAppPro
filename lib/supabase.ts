@@ -14,7 +14,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: isWeb,                 // ВКЛЮЧЕНО на web
-    storage: AsyncStorage, // web — localStorage по умолчанию
+    storage: isWeb ? undefined : (AsyncStorage as any), // web — localStorage по умолчанию
   },
 });
 

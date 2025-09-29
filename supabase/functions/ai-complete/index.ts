@@ -65,9 +65,9 @@ function modelFor(task: Task) {
   // если задан глобальный оверрайд — используем его
   if (OPENROUTER_MODEL) return OPENROUTER_MODEL;
   // по умолчанию: инсайты — чат-модель, декомпозиция — reasoning
-  if (task === 'insights') return 'deepseek/deepseek-chat';
+  if (task === 'insights') return 'deepseek/deepseek-r1';
   if (task === 'decompose_goal') return 'deepseek/deepseek-r1';
-  return 'deepseek/deepseek-chat';
+  return 'deepseek/deepseek-r1';
 }
 
 async function callOpenRouter(messages: any[], task: Task) {

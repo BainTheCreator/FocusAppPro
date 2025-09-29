@@ -32,7 +32,7 @@ export type UiTemplate = {
 // Загрузка опубликованных шаблонов с количеством шагов
 export async function fetchGoalTemplates(): Promise<UiTemplate[]> {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
+  //if (!token) throw new Error('Not authenticated');
 
   const { data, error } = await supabase
     .from('goal_templates')

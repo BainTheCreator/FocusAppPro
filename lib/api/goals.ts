@@ -49,7 +49,7 @@ async function requireToken() {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token ?? null;
   console.log('[auth] token?', !!token); // лог ДО проверки
-  if (!token) throw new Error('Not authenticated');
+  // if (!token) throw new Error('Not authenticated');
   return token;
 }
 
