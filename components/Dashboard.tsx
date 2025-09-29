@@ -1,21 +1,50 @@
+// components/Dashboard.tsx — цели из БД + модалка подзадач + AI помощь
 import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, Modal } from 'react-native';
+import { View, Text, ScrollView, Pressable, Modal, ActivityIndicator } from 'react-native';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Brain, BookOpen, Play, Target as TargetIcon, TrendingUp, Clock,
-  CheckSquare, Square, PauseCircle, PlayCircle, X
+  Plus,
+  Brain,
+  BookOpen,
+  Play,
+  Target as TargetIcon,
+  TrendingUp,
+  Clock,
+  CheckSquare,
+  Square,
+  PauseCircle,
+  PlayCircle,
+  X,
+  RefreshCw,
 } from 'lucide-react-native';
 
-import { fetchGoals, fetchGoalDetail, toggleSubtask, setGoalStatus, UiGoal, DbSubtask } from '@/lib/api';
+import {
+  fetchGoals,
+  toggleSubtask,
+  setGoalStatus,
+  type UiGoal,
+  type DbSubtask,
+} from '@/lib/api/goals';
+import { aiInsights } from '@/lib/api/ai';
+import { supabase } from '@/lib/supabase';
 
 const PRIMARY = '#35D07F';
-const MUTED = '#9ca3af';
 
-const StatCard = ({ icon: Icon, label, value, trend }: { icon: React.ComponentType<any>, label: string, value: string, trend?: string }) => (
+const StatCard = ({
+  icon: Icon,
+  label,
+  value,
+  trend,
+}: {
+  icon: React.ComponentType<any>;
+  label: string;
+  value: string;
+  trend?: string;
+}) => (
   <Card {...({ className: 'p-4 bg-card shadow-soft border-0' } as any)}>
     <View {...({ className: 'flex-row items-center justify-between' } as any)}>
       <View>
@@ -30,21 +59,23 @@ const StatCard = ({ icon: Icon, label, value, trend }: { icon: React.ComponentTy
   </Card>
 );
 
-const GoalCard = ({ goal, onOpen }: { goal: UiGoal, onOpen: () => void }) => (
+const GoalCard = ({ goal, onOpen }: { goal: UiGoal; onOpen: () => void }) => (
   <Card {...({ className: 'p-4 bg-gradient-card shadow-medium border-0 transition-all duration-300' } as any)}>
     <View {...({ className: 'flex-row items-start justify-between mb-3' } as any)}>
       <View {...({ className: 'flex-row items-center space-x-3' } as any)}>
         <Text {...({ className: 'w-8 h-8 text-xl' } as any)}>{goal.icon}</Text>
         <View>
           <Text {...({ className: 'font-semibold text-foreground' } as any)}>{goal.title}</Text>
-          <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>
-            {goal.deadline || '—'}
-          </Text>
+          <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>{goal.deadline || '—'}</Text>
         </View>
       </View>
-      <Badge variant={goal.status === 'active' ? 'default' : goal.status === 'paused' ? 'secondary' : 'outline'}>
-        <Text className='text-white'>
-          {goal.status === 'active' ? 'Активна' : goal.status === 'paused' ? 'На паузе' : 'Завершена'}
+      <Badge
+        variant={
+          goal.status === 'active' ? 'default' : goal.status === 'paused' ? 'secondary' : 'outline'
+        }
+      >
+        <Text className="text-white">
+          {goal.status === 'completed' ? 'Завершена' : goal.status === 'paused' ? 'На паузе' : 'Активна'}
         </Text>
       </Badge>
     </View>
@@ -79,20 +110,51 @@ interface DashboardProps {
   onLibrary: () => void;
   onAnalytics: () => void;
   extraBottomPadding?: number;
+  isAuthed: boolean; // ← важный флаг
 }
 
-export const Dashboard = ({ onCreateGoal, onLibrary, onAnalytics, extraBottomPadding = 0 }: DashboardProps) => {
+export const Dashboard = ({
+  onCreateGoal,
+  onLibrary,
+  onAnalytics,
+  extraBottomPadding = 0,
+  isAuthed,
+}: DashboardProps) => {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<'all' | 'active' | 'paused' | 'completed'>('active');
 
-  // Список целей
-  const { data: goals = [], isFetching, refetch } = useQuery({
+  // Список целей — только после авторизации
+  const { data: goals = [], isFetching, refetch, error, isLoading, isError } = useQuery({
     queryKey: ['goals'],
-    queryFn: fetchGoals,
+    queryFn: () => fetchGoals(),
     staleTime: 10_000,
+    enabled: !!isAuthed,
+    retry: 1,
+    refetchOnWindowFocus: false,
   });
 
-  // Аналитика
+  // Realtime invalidate — только если авторизованы
+  useEffect(() => {
+    if (!isAuthed) return;
+    const ch1 = supabase
+      .channel('rt:user_targets')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_targets' }, () => {
+        qc.invalidateQueries({ queryKey: ['goals'] });
+      })
+      .subscribe();
+    const ch2 = supabase
+      .channel('rt:target_target')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'target_target' }, () => {
+        qc.invalidateQueries({ queryKey: ['goals'] });
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch1);
+      supabase.removeChannel(ch2);
+    };
+  }, [qc, isAuthed]);
+
+  // Быстрые метрики
   const stats = useMemo(() => {
     const total = goals.length;
     const active = goals.filter((g) => g.status === 'active').length;
@@ -107,181 +169,190 @@ export const Dashboard = ({ onCreateGoal, onLibrary, onAnalytics, extraBottomPad
     return goals.filter((g) => g.status === activeTab);
   }, [goals, activeTab]);
 
-  // Детальная модалка
+  // Модалка детали цели
   const [openGoal, setOpenGoal] = useState<UiGoal | null>(null);
-  const { data: subtasks = [], refetch: refetchSubtasks } = useQuery({
-    queryKey: ['goal', openGoal?.id],
-    queryFn: async () => openGoal ? fetchGoalDetail(openGoal.id) : [],
-    enabled: !!openGoal,
-  });
+  const openSubtasks: DbSubtask[] = useMemo(() => openGoal?.subtasks ?? [], [openGoal]);
 
-  const goalProgressFromSubtasks = (subs: DbSubtask[]) => {
-    const total = subs.length;
-    const done = subs.filter((s) => s.is_complete).length;
-    return total > 0 ? Math.round((done / total) * 100) : 0;
-    // если хотите 100% для целей без подцелей — верните 100
-  };
-
-  // Отметить/снять подзадачу (optimistic update)
+  // Тоггл подзадачи
   const handleToggleSubtask = async (s: DbSubtask) => {
     if (!openGoal) return;
-    // оптимистично в кэше
-    qc.setQueryData(['goal', openGoal.id], (prev: any) => {
-      const next = (prev as DbSubtask[]).map((x) => x.id === s.id ? { ...x, is_complete: !x.is_complete } : x);
-      return next;
-    });
-    // пересчёт прогресса по цели в списке
-    qc.setQueryData(['goals'], (prev: any) => {
-      const list = (prev as UiGoal[]) ?? [];
-      return list.map((g) => g.id === openGoal.id
-        ? { ...g, progress: goalProgressFromSubtasks(subtasks.map((x) => x.id === s.id ? { ...x, is_complete: !x.is_complete } : x)) }
-        : g);
-    });
-
+    setOpenGoal((prev) =>
+      prev ? { ...prev, subtasks: (prev.subtasks ?? []).map((x) => (x.id === s.id ? { ...x, is_complete: !x.is_complete } : x)) } : prev
+    );
     try {
       const res = await toggleSubtask(s.id, !s.is_complete);
-      // корректируем прогресс из ответа сервера (на случай расхождений)
       qc.setQueryData(['goals'], (prev: any) => {
-        const list = (prev as UiGoal[]) ?? [];
-        return list.map((g) => g.id === openGoal.id ? { ...g, progress: res.progress } : g);
+        const list: UiGoal[] = (prev as UiGoal[]) ?? [];
+        return list.map((g) => (g.id === s.target_id ? { ...g, progress: res.progress } : g));
       });
-    } catch (e) {
-      // откат
-      qc.setQueryData(['goal', openGoal.id], (prev: any) =>
-        (prev as DbSubtask[]).map((x) => x.id === s.id ? { ...x, is_complete: s.is_complete } : x)
+    } catch {
+      setOpenGoal((prev) =>
+        prev ? { ...prev, subtasks: (prev.subtasks ?? []).map((x) => (x.id === s.id ? { ...x, is_complete: s.is_complete } : x)) } : prev
       );
-      await refetchSubtasks();
       await refetch();
-      console.warn('toggle subtask error', e);
     }
   };
 
   // Смена статуса цели
-  const handleSetStatus = async (goal: UiGoal, status: 'active' | 'paused' | 'completed') => {
-    // оптимистично
+  const handleSetGoalStatus = async (goal: UiGoal, status: 'active' | 'paused' | 'completed') => {
     qc.setQueryData(['goals'], (prev: any) => {
-      const list = (prev as UiGoal[]) ?? [];
-      return list.map((g) => g.id === goal.id ? { ...g, status } : g);
+      const list: UiGoal[] = (prev as UiGoal[]) ?? [];
+      return list.map((g) => (g.id === goal.id ? { ...g, status } : g));
     });
+    setOpenGoal((prev) => (prev && prev.id === goal.id ? { ...prev, status } : prev));
     try {
       await setGoalStatus(goal.id, status);
-      if (openGoal && openGoal.id === goal.id) {
-        setOpenGoal({ ...openGoal, status });
-      }
-    } catch (e) {
+    } catch {
       await refetch();
-      console.warn('set goal status error', e);
     }
+  };
+
+  /* ========================= AI ПОМОЩЬ ========================= */
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiText, setAiText] = useState<string>('');
+
+  const summarizeGoals = (arr: UiGoal[]) => {
+    const total = arr.length;
+    const completed = arr.filter((g) => g.status === 'completed').length;
+    const active = arr.filter((g) => g.status === 'active').length;
+    const paused = arr.filter((g) => g.status === 'paused').length;
+    const top = [...arr]
+      .sort((a, b) => b.progress - a.progress)
+      .slice(0, 5)
+      .map((g) => `- ${g.title} [${g.status}] • прогресс ${g.progress}% • шагов ${g.subtasksCount}`)
+      .join('\n');
+
+    return `Всего целей: ${total}, активных: ${active}, на паузе: ${paused}, завершено: ${completed}.
+Топ по прогрессу:
+${top || '- нет'}`;
+  };
+
+  const fetchAiHelp = async () => {
+    if (!isAuthed) return;
+    try {
+      setAiLoading(true);
+      const summary = summarizeGoals(goals);
+      const text = await aiInsights(summary);
+      setAiText(text);
+    } catch {
+      setAiText('Не удалось получить советы. Попробуйте ещё раз.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const openAiModal = () => {
+    setAiOpen(true);
+    setAiText('');
+    fetchAiHelp();
   };
 
   return (
     <View {...({ className: 'bg-background' } as any)}>
       {/* Header */}
       <View {...({ className: 'bg-gradient-primary py-6' } as any)}>
-        <View {...({ className: 'max-w-md px-5' } as any)}>
-          <Text {...({ className: 'text-2xl font-bold text-white mb-2' } as any)}>FocusAppPro</Text>
-          <Text {...({ className: 'text-white/80' } as any)}>
-            {isFetching ? 'Обновляем цели…' : 'Добро пожаловать! 🎯'}
-          </Text>
+        <View {...({ className: 'max-w-md px-5 flex-row items-center justify-between' } as any)}>
+          <View>
+            <Text {...({ className: 'text-2xl font-bold text-white mb-1' } as any)}>FocusAppPro</Text>
+            {isError && (
+              <Text>{String(error)}</Text>
+            )}
+            <Text {...({ className: 'text-white/80' } as any)}>
+              {!isAuthed ? 'Войдите, чтобы видеть цели' : isFetching ? 'Обновляем цели…' : 'Добро пожаловать! 🎯'}
+            </Text>
+          </View>
+          <Pressable onPress={() => isAuthed && refetch()} disabled={!isAuthed} {...({ className: 'px-3 py-2 rounded-lg bg-white/10 active:opacity-80' } as any)}>
+            <View {...({ className: 'flex-row items-center' } as any)}>
+              <RefreshCw size={14} color="#fff" />
+              <Text {...({ className: 'text-white text-xs ml-1' } as any)}>{isFetching ? '...' : 'Обновить'}</Text>
+            </View>
+          </Pressable>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 + extraBottomPadding }} {...({ className: 'mt-4' } as any)}>
-        {/* Quick Stats */}
-        <View {...({ className: 'grid grid-cols-2 gap-3 mb-6' } as any)}>
-          <StatCard icon={TargetIcon} label="Всего целей" value={String(stats.total)} />
-          <StatCard icon={TrendingUp} label="Средний прогресс" value={`${stats.avgProgress}%`} />
-          <StatCard icon={Play} label="Активные" value={String(stats.active)} />
-          <StatCard icon={PauseCircle} label="На паузе" value={String(stats.paused)} />
-        </View>
+        {!isAuthed ? (
+          <View {...({ className: 'items-center py-12' } as any)}>
+            <View {...({ className: 'w-16 h-16 rounded-full bg-muted items-center justify-center mb-4' } as any)}>
+              <TargetIcon size={32} color={PRIMARY} />
+            </View>
+            <Text {...({ className: 'font-semibold text-foreground mb-2' } as any)}>Требуется вход</Text>
+            <Text {...({ className: 'text-sm text-muted-foreground text-center' } as any)}>
+              Авторизуйтесь, чтобы просматривать и управлять целями.
+            </Text>
+          </View>
+        ) : (
+          <>
+            {/* Quick Stats */}
+            <View {...({ className: 'grid grid-cols-2 gap-3 mb-6' } as any)}>
+              <StatCard icon={TargetIcon} label="Всего целей" value={String(stats.total)} />
+              <StatCard icon={TrendingUp} label="Средний прогресс" value={`${stats.avgProgress}%`} />
+            </View>
 
-        {/* Action Buttons */}
-        <View {...({ className: 'grid grid-cols-3 gap-3 mb-6' } as any)}>
-          <Button onPress={onCreateGoal} {...({ className: 'flex-col items-center justify-center h-16 bg-primary rounded-2xl' } as any)}>
-            <Plus size={20} color="#fff" {...({ className: 'mb-1' } as any)} />
-            <Text {...({ className: 'text-xs text-white' } as any)}>Создать</Text>
-          </Button>
+            {/* Actions */}
+            <View {...({ className: 'grid grid-cols-3 gap-3 mb-6' } as any)}>
+              <Button onPress={onCreateGoal} {...({ className: 'flex-col items-center justify-center h-16 bg-primary rounded-2xl' } as any)}>
+                <Plus size={20} color="#fff" {...({ className: 'mb-1' } as any)} />
+                <Text {...({ className: 'text-xs text-white' } as any)}>Создать</Text>
+              </Button>
 
-          <Button onPress={() => {}} variant="outline" {...({ className: 'flex-col items-center justify-center h-16 border-primary rounded-2xl' } as any)}>
-            <Brain size={20} color={PRIMARY} {...({ className: 'mb-1' } as any)} />
-            <Text {...({ className: 'text-xs text-primary' } as any)}>AI помощь</Text>
-          </Button>
+              <Button onPress={openAiModal} variant="outline" {...({ className: 'flex-col items-center justify-center h-16 border-primary rounded-2xl' } as any)}>
+                <Brain size={20} color={PRIMARY} {...({ className: 'mb-1' } as any)} />
+                <Text {...({ className: 'text-xs text-primary' } as any)}>AI помощь</Text>
+              </Button>
 
-          <Button onPress={onLibrary} variant="outline" {...({ className: 'flex-col items-center justify-center h-16 border-primary rounded-2xl' } as any)}>
-            <BookOpen size={20} color={PRIMARY} {...({ className: 'mb-1' } as any)} />
-            <Text {...({ className: 'text-xs text-primary' } as any)}>Библиотека</Text>
-          </Button>
-        </View>
+              <Button onPress={onLibrary} variant="outline" {...({ className: 'flex-col items-center justify-center h-16 border-primary rounded-2xl' } as any)}>
+                <BookOpen size={20} color={PRIMARY} {...({ className: 'mb-1' } as any)} />
+                <Text {...({ className: 'text-xs text-primary' } as any)}>Библиотека</Text>
+              </Button>
+            </View>
 
-        {/* Tabs */}
-        <View {...({ className: 'flex-row bg-muted rounded-xl p-1 mb-4' } as any)}>
-          {[
-            { key: 'active', label: 'Активные' },
-            { key: 'paused', label: 'На паузе' },
-            { key: 'completed', label: 'Завершенные' },
-            { key: 'all', label: 'Все' },
-          ].map((tab) => {
-            const isActive = activeTab === (tab.key as any);
-            return (
-              <Pressable
-                key={tab.key}
-                onPress={() => setActiveTab(tab.key as any)}
-                {...({
-                  className:
-                    'flex-1 rounded-lg items-center justify-center py-2 px-3 transition-all ' +
-                    (isActive ? 'bg-primary/15 border border-primary/30' : 'bg-transparent'),
-                } as any)}
-              >
-                <Text
-                  {...({
-                    className:
-                      'text-sm font-medium ' +
-                      (isActive ? 'text-primary' : 'text-muted-foreground'),
-                  } as any)}
-                >
-                  {tab.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+            {/* Tabs */}
+            <View {...({ className: 'flex-row bg-muted rounded-xl p-1 mb-4' } as any)}>
+              {[
+                { key: 'active', label: 'Активные' },
+                { key: 'paused', label: 'На паузе' },
+                { key: 'completed', label: 'Завершенные' },
+                { key: 'all', label: 'Все' },
+              ].map((tab) => {
+                const isActive = activeTab === (tab.key as any);
+                return (
+                  <Pressable key={tab.key} onPress={() => setActiveTab(tab.key as any)} {...({ className: 'flex-1 rounded-lg items-center justify-center py-2 px-3 transition-all ' + (isActive ? 'bg-primary/15 border border-primary/30' : 'bg-transparent') } as any)}>
+                    <Text {...({ className: 'text-sm font-medium ' + (isActive ? 'text-primary' : 'text-muted-foreground') } as any)}>{tab.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
-        {/* Goals List */}
-        <View {...({ className: 'space-y-3 flex flex-col gap-3' } as any)}>
-          {filteredGoals.map((goal) => (
-            <GoalCard key={goal.id} goal={goal} onOpen={() => setOpenGoal(goal)} />
-          ))}
+            {/* Goals */}
+            <View {...({ className: 'space-y-3 flex flex-col gap-3' } as any)}>
+              {filteredGoals.map((goal) => (
+                <GoalCard key={goal.id} goal={goal} onOpen={() => setOpenGoal(goal)} />
+              ))}
 
-          {filteredGoals.length === 0 && (
-            <View {...({ className: 'items-center py-8' } as any)}>
-              <View {...({ className: 'w-16 h-16 rounded-full bg-muted items-center justify-center mb-4' } as any)}>
-                <TargetIcon size={32} color={PRIMARY} />
-              </View>
-              <Text {...({ className: 'font-semibold text-foreground mb-2' } as any)}>Пока пусто</Text>
-              <Text {...({ className: 'text-sm text-muted-foreground mb-4 text-center' } as any)}>
-                {activeTab === 'active' ? 'Создайте свою первую цель' : 'Нет целей в этой категории'}
-              </Text>
-              {activeTab === 'active' && (
-                <Button onPress={onCreateGoal} variant="outline" {...({ className: 'border-primary' } as any)}>
-                  <View {...({ className: 'flex-row items-center' } as any)}>
-                    <Plus size={16} color={PRIMARY} />
-                    <Text {...({ className: 'text-primary ml-2' } as any)}>Создать цель</Text>
+              {filteredGoals.length === 0 && (
+                <View {...({ className: 'items-center py-8' } as any)}>
+                  <View {...({ className: 'w-16 h-16 rounded-full bg-muted items-center justify-center mb-4' } as any)}>
+                    <TargetIcon size={32} color={PRIMARY} />
                   </View>
-                </Button>
+                  <Text {...({ className: 'font-semibold text-foreground mb-2' } as any)}>Пока пусто</Text>
+                  <Text {...({ className: 'text-sm text-muted-foreground mb-4 text-center' } as any)}>
+                    {activeTab === 'active' ? 'Создайте свою первую цель' : 'Нет целей в этой вкладке'}
+                  </Text>
+                  {activeTab === 'active' && (
+                    <Button onPress={onCreateGoal} variant="outline" {...({ className: 'border-primary' } as any)}>
+                      <View {...({ className: 'flex-row items-center' } as any)}>
+                        <Plus size={16} color={PRIMARY} />
+                        <Text {...({ className: 'text-primary ml-2' } as any)}>Создать цель</Text>
+                      </View>
+                    </Button>
+                  )}
+                </View>
               )}
             </View>
-          )}
-        </View>
-
-        {/* Bottom Action */}
-        <View {...({ className: 'mt-8 items-center' } as any)}>
-          <Button onPress={onAnalytics} variant="outline" {...({ className: 'w-full rounded-2xl border-primary' } as any)}>
-            <View {...({ className: 'flex-row items-center justify-center' } as any)}>
-              <TrendingUp size={16} color={PRIMARY} />
-              <Text {...({ className: 'text-primary ml-2' } as any)}>Посмотреть аналитику</Text>
-            </View>
-          </Button>
-        </View>
+          </>
+        )}
       </ScrollView>
 
       {/* Goal Detail Modal */}
@@ -296,79 +367,95 @@ export const Dashboard = ({ onCreateGoal, onLibrary, onAnalytics, extraBottomPad
                 <X size={18} color="#9CA3AF" />
               </Pressable>
             </View>
-            {openGoal?.description ? (
-              <Text {...({ className: 'text-muted-foreground mb-2' } as any)}>{openGoal.description}</Text>
-            ) : null}
+
+            {openGoal?.description ? <Text {...({ className: 'text-muted-foreground mb-2' } as any)}>{openGoal.description}</Text> : null}
+
             <View {...({ className: 'flex-row items-center mb-3' } as any)}>
               <Clock size={14} color={PRIMARY} />
-              <Text {...({ className: 'text-sm text-muted-foreground ml-1' } as any)}>
-                Дедлайн: {openGoal?.deadline || '—'}
-              </Text>
+              <Text {...({ className: 'text-sm text-muted-foreground ml-1' } as any)}>Дедлайн: {openGoal?.deadline || '—'}</Text>
             </View>
 
-            {/* Статус */}
             {openGoal && (
               <View {...({ className: 'flex-row gap-2 mb-3' } as any)}>
-                <Button
-                  variant={openGoal.status === 'active' ? 'default' : 'outline'}
-                  onPress={() => handleSetStatus(openGoal, 'active')}
-                  {...({ className: 'flex-1 h-10' } as any)}
-                >
+                <Button variant={openGoal.status === 'active' ? 'default' : 'outline'} onPress={() => handleSetGoalStatus(openGoal, 'active')} {...({ className: 'flex-1 h-10' } as any)}>
                   <View {...({ className: 'flex-row items-center justify-center' } as any)}>
                     <PlayCircle size={14} color={openGoal.status === 'active' ? '#fff' : PRIMARY} />
-                    <Text {...({ className: 'ml-1 ' + (openGoal.status === 'active' ? 'text-primary-foreground' : 'text-primary') } as any)}>
-                      Активна
-                    </Text>
+                    <Text {...({ className: 'ml-1 ' + (openGoal.status === 'active' ? 'text-primary-foreground' : 'text-primary') } as any)}>Активна</Text>
                   </View>
                 </Button>
-                <Button
-                  variant={openGoal.status === 'paused' ? 'default' : 'outline'}
-                  onPress={() => handleSetStatus(openGoal, 'paused')}
-                  {...({ className: 'flex-1 h-10' } as any)}
-                >
+                <Button variant={openGoal.status === 'paused' ? 'default' : 'outline'} onPress={() => handleSetGoalStatus(openGoal, 'paused')} {...({ className: 'flex-1 h-10' } as any)}>
                   <View {...({ className: 'flex-row items-center justify-center' } as any)}>
                     <PauseCircle size={14} color={openGoal.status === 'paused' ? '#fff' : PRIMARY} />
-                    <Text {...({ className: 'ml-1 ' + (openGoal.status === 'paused' ? 'text-primary-foreground' : 'text-primary') } as any)}>
-                      Пауза
-                    </Text>
+                    <Text {...({ className: 'ml-1 ' + (openGoal.status === 'paused' ? 'text-primary-foreground' : 'text-primary') } as any)}>Пауза</Text>
                   </View>
                 </Button>
-                <Button
-                  variant={openGoal.status === 'completed' ? 'default' : 'outline'}
-                  onPress={() => handleSetStatus(openGoal, 'completed')}
-                  {...({ className: 'flex-1 h-10' } as any)}
-                >
+                <Button variant={openGoal.status === 'completed' ? 'default' : 'outline'} onPress={() => handleSetGoalStatus(openGoal, 'completed')} {...({ className: 'flex-1 h-10' } as any)}>
                   <View {...({ className: 'flex-row items-center justify-center' } as any)}>
                     <CheckSquare size={14} color={openGoal.status === 'completed' ? '#fff' : PRIMARY} />
-                    <Text {...({ className: 'ml-1 ' + (openGoal.status === 'completed' ? 'text-primary-foreground' : 'text-primary') } as any)}>
-                      Готово
-                    </Text>
+                    <Text {...({ className: 'ml-1 ' + (openGoal.status === 'completed' ? 'text-primary-foreground' : 'text-primary') } as any)}>Готово</Text>
                   </View>
                 </Button>
               </View>
             )}
 
-            {/* Подзадачи */}
             <Text {...({ className: 'text-foreground/90 font-semibold mb-2' } as any)}>Подзадачи</Text>
             <View {...({ className: 'max-h-[50vh]' } as any)}>
               <ScrollView>
-                {subtasks.length === 0 ? (
+                {(openSubtasks?.length ?? 0) === 0 ? (
                   <Text {...({ className: 'text-muted-foreground' } as any)}>Подзадач нет</Text>
-                ) : subtasks.map((s) => (
-                  <Pressable
-                    key={s.id}
-                    onPress={() => handleToggleSubtask(s)}
-                    {...({ className: 'rounded-xl border border-border px-3 py-2 mb-2 active:opacity-80' } as any)}
-                  >
-                    <View {...({ className: 'flex-row items-center justify-between' } as any)}>
-                      <Text {...({ className: 'text-foreground flex-1 mr-3' } as any)}>
-                        {s.name || 'Без названия'}
-                      </Text>
-                      {s.is_complete ? <CheckSquare size={18} color={PRIMARY} /> : <Square size={18} color={MUTED} />}
-                    </View>
-                  </Pressable>
-                ))}
+                ) : (
+                  openSubtasks.map((s) => (
+                    <Pressable key={s.id} onPress={() => handleToggleSubtask(s)} {...({ className: 'rounded-xl border border-border px-3 py-2 mb-2 active:opacity-80' } as any)}>
+                      <View {...({ className: 'flex-row items-center justify-between' } as any)}>
+                        <Text {...({ className: 'text-foreground flex-1 mr-3' } as any)}>{s.name || 'Без названия'}</Text>
+                        {s.is_complete ? <CheckSquare size={18} color={PRIMARY} /> : <Square size={18} color="#9CA3AF" />}
+                      </View>
+                    </Pressable>
+                  ))
+                )}
               </ScrollView>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* AI Help Modal */}
+      <Modal transparent visible={aiOpen} onRequestClose={() => setAiOpen(false)} animationType="slide">
+        <View {...({ className: 'flex-1 bg-black/60 justify-end' } as any)}>
+          <View {...({ className: 'rounded-t-2xl bg-card px-5 pt-4 pb-6' } as any)}>
+            <View {...({ className: 'flex-row items-center justify-between mb-2' } as any)}>
+              <Text {...({ className: 'text-foreground text-lg font-semibold' } as any)}>AI помощь</Text>
+              <Pressable onPress={() => setAiOpen(false)} {...({ className: 'p-2 rounded-lg active:opacity-70' } as any)}>
+                <X size={18} color="#9CA3AF" />
+              </Pressable>
+            </View>
+
+            <Card {...({ className: 'p-4 bg-gradient-card border-0 mb-3' } as any)}>
+              <Text {...({ className: 'text-white/90 mb-1' } as any)}>Советы по ускорению прогресса и приоритетам.</Text>
+              <Text {...({ className: 'text-white/60 text-xs' } as any)}>Генерация на основе ваших текущих целей.</Text>
+            </Card>
+
+            <View {...({ className: 'min-h-[140px] rounded-2xl border border-border bg-card p-4' } as any)}>
+              {aiLoading ? (
+                <View {...({ className: 'flex-row items-center' } as any)}>
+                  <ActivityIndicator color={PRIMARY} />
+                  <Text {...({ className: 'text-muted-foreground ml-2' } as any)}>AI думает…</Text>
+                </View>
+              ) : (
+                <Text {...({ className: 'text-foreground' } as any)}>{aiText || 'Нет данных'}</Text>
+              )}
+            </View>
+
+            <View {...({ className: 'flex-row gap-2 mt-3' } as any)}>
+              <Button variant="outline" onPress={() => fetchAiHelp()} disabled={aiLoading || !isAuthed} {...({ className: 'flex-1 h-11' } as any)}>
+                <View {...({ className: 'flex-row items-center justify-center' } as any)}>
+                  <Brain size={14} color={PRIMARY} />
+                  <Text {...({ className: 'text-primary ml-1' } as any)}>Обновить советы</Text>
+                </View>
+              </Button>
+              <Button onPress={() => setAiOpen(false)} {...({ className: 'flex-1 h-11' } as any)}>
+                <Text {...({ className: 'text-primary-foreground' } as any)}>Закрыть</Text>
+              </Button>
             </View>
           </View>
         </View>

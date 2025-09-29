@@ -1,4 +1,4 @@
-// CreateGoal.tsx — RN + NativeWind (иконки через color, зазоры mb-*, 2 колонки, рабочая "назад")
+// CreateGoal.tsx — создание (личной/командной) цели + ИИ-декомпозиция DeepSeek + ручное редактирование подцелей
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, Text, Pressable, ScrollView, Modal, BackHandler, Platform } from 'react-native';
 import { Button } from '@/components/ui/button';
@@ -21,9 +21,10 @@ import {
   Pencil,
 } from 'lucide-react-native';
 import { Calendar as RNCalendar, LocaleConfig } from 'react-native-calendars';
-import { createUserGoal } from '@/lib/api';
+import { createUserGoal, type CreateGoalPayload } from '@/lib/api';
+import { aiDecomposeGoal } from '@/lib/api/ai';
 
-// Настройка RU локали для web-календаря
+// Локаль календаря (web)
 LocaleConfig.locales['ru'] = {
   monthNames: ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'],
   monthNamesShort: ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'],
@@ -48,21 +49,22 @@ const categories = [
 ];
 
 const durations = [
-  { id: 'short', label: 'Краткосрочная', desc: 'До 3 месяцев' },   // +3 мес
-  { id: 'medium', label: 'Среднесрочная', desc: '3-12 месяцев' },  // +6 мес
-  { id: 'long', label: 'Долгосрочная', desc: 'Более года' },       // +12 мес
+  { id: 'short', label: 'Краткосрочная', desc: 'До 3 месяцев' },
+  { id: 'medium', label: 'Среднесрочная', desc: '3-12 месяцев' },
+  { id: 'long', label: 'Долгосрочная', desc: 'Более года' },
 ];
 
 const iconOptions = ['🎯','💼','🧠','💡','📚','🏃‍♂️','💰','🌱','⚡','🚀','🗣️','👨‍👩‍👧‍👦','🏆','🎵','🧘','🍎','🪙','🛠️','🧩','📈'];
 
+type Subtask = { id: number; title: string; completed: boolean; deadline: string };
+
 interface CreateGoalProps {
   onBack: () => void;
   onSave: (goal: any) => void;
+  teamId?: number;
 }
 
-type Subtask = { id: number; title: string; completed: boolean; deadline: string };
-
-export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
+export const CreateGoal = ({ onBack, onSave, teamId }: CreateGoalProps) => {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [saving, setSaving] = useState(false);
 
@@ -73,7 +75,7 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
     category: '',
     duration: '',
     deadline: '',
-    isTeam: false,
+    isTeam: !!teamId,
     subtasks: [] as Subtask[],
   });
 
@@ -86,14 +88,13 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
   const [draftSubtasks, setDraftSubtasks] = useState<Subtask[]>([]);
   const nextIdRef = useRef<number>(1);
 
-  // БЕЗОПАСНОЕ подключение модалки датапикера на native
+  // Нативный дата-пикер (без dynamic import — безопасный require)
   const NativeDatePicker = useMemo<any>(() => {
     if (Platform.OS === 'web') return null;
     try {
       const mod = require('react-native-modal-datetime-picker');
       return mod?.default ?? mod;
-    } catch (e) {
-      console.warn('DatePicker module not available', e);
+    } catch {
       return null;
     }
   }, []);
@@ -115,43 +116,26 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
     const month = date.getMonth();
     const day = date.getDate();
     const target = new Date(year, month + months, 1);
-    const daysInTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-    target.setDate(Math.min(day, daysInTargetMonth));
+    const dim = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+    target.setDate(Math.min(day, dim));
     target.setHours(0, 0, 0, 0);
     return target;
   };
 
   const formatDisplayDate = (iso?: string) => {
     if (!iso) return '';
-    try {
-      const date = fromISODate(iso);
-      return date.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
-    } catch {
-      return iso || '';
-    }
+    const d = fromISODate(iso);
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
-  const mockSubtasks: Subtask[] = [
-    { id: 1, title: 'Изучить основы React', completed: false, deadline: '15 дек' },
-    { id: 2, title: 'Создать первый проект', completed: false, deadline: '22 дек' },
-    { id: 3, title: 'Изучить React Hooks', completed: false, deadline: '1 янв' },
-    { id: 4, title: 'Создать портфолио', completed: false, deadline: '15 янв' },
-  ];
-
-  const handleAIDecomposition = () => {
-    setShowAIDecomposition(true);
-    setTimeout(() => {
-      setGoal((prev) => ({ ...prev, subtasks: mockSubtasks }));
-      setShowAIDecomposition(false);
-    }, 1500);
-  };
-
-  const canProceed = () => {
+  // Разрешение на переход по шагам
+  const canProceed = useCallback(() => {
     if (step === 1) return goal.title.trim().length > 0 && !!goal.category;
     if (step === 2) return !!goal.duration && !!goal.deadline;
     return true;
-  };
+  }, [step, goal.title, goal.category, goal.duration, goal.deadline]);
 
+  // Back (стрелка + аппаратная)
   const handleBackPress = useCallback(() => {
     if (iconPickerOpen) {
       setIconPickerOpen(false);
@@ -186,46 +170,60 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
   const openEditSubtasks = () => {
     const current = goal.subtasks ?? [];
     nextIdRef.current = (current.length ? Math.max(...current.map((s) => s.id)) : 0) + 1;
-    setDraftSubtasks(current.length ? current.map((s) => ({ ...s })) : [{ id: nextIdRef.current++, title: '', completed: false, deadline: '' }]);
+    setDraftSubtasks(
+      current.length ? current.map((s) => ({ ...s })) : [{ id: nextIdRef.current++, title: '', completed: false, deadline: '' }],
+    );
     setEditSubtasks(true);
   };
 
-  const addDraftSubtask = () => {
-    setDraftSubtasks((prev) => [...prev, { id: nextIdRef.current++, title: '', completed: false, deadline: '' }]);
-  };
-  const removeDraftSubtask = (id: number) => {
-    setDraftSubtasks((prev) => prev.filter((s) => s.id !== id));
-  };
-  const updateDraftTitle = (id: number, title: string) => {
-    setDraftSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
-  };
-  const toggleDraftCompleted = (id: number) => {
-    setDraftSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, completed: !s.completed } : s)));
-  };
+  const addDraftSubtask = () => setDraftSubtasks((prev) => [...prev, { id: nextIdRef.current++, title: '', completed: false, deadline: '' }]);
+  const removeDraftSubtask = (id: number) => setDraftSubtasks((prev) => prev.filter((s) => s.id !== id));
+  const updateDraftTitle = (id: number, title: string) => setDraftSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+  const toggleDraftCompleted = (id: number) => setDraftSubtasks((prev) => prev.map((s) => (s.id === id ? { ...s, completed: !s.completed } : s)));
 
   const applyDraftSubtasks = () => {
-    const normalized = draftSubtasks
-      .map((s) => ({ ...s, title: s.title.trim() }))
-      .filter((s) => s.title.length > 0);
+    const normalized = draftSubtasks.map((s) => ({ ...s, title: s.title.trim() })).filter((s) => s.title.length > 0);
     setGoal((prev) => ({ ...prev, subtasks: normalized }));
     setEditSubtasks(false);
   };
 
-  // Сохранение в БД через Edge Function goal-create
+  // ИИ-декомпозиция DeepSeek
+  const handleAIDecomposition = async () => {
+    try {
+      setShowAIDecomposition(true);
+      const steps = await aiDecomposeGoal({
+        title: goal.title.trim(),
+        description: goal.description?.trim() || null,
+        deadline: goal.deadline || null,
+      });
+      let nextId = (goal.subtasks?.length ? Math.max(...goal.subtasks.map((s) => s.id)) : 0) + 1;
+      const subtasks = steps.map((s) => ({
+        id: nextId++,
+        title: s.name,
+        completed: !!s.is_complete,
+        deadline: '',
+      }));
+      setGoal((prev) => ({ ...prev, subtasks }));
+    } catch (e) {
+      console.warn('AI decomposition error', e);
+    } finally {
+      setShowAIDecomposition(false);
+    }
+  };
+
+  // Сохранение в БД
   const saveToDb = async () => {
     if (!goal.title.trim()) return;
     setSaving(true);
     try {
-      const payload = {
+      const payload: CreateGoalPayload & { team_id?: number } = {
         title: goal.title.trim(),
         description: goal.description?.trim() || null,
         icon: goal.icon || null,
-        date_end: goal.deadline || null, // YYYY-MM-DD
-        status: 'active' as const,
-        subtasks: (goal.subtasks || []).map((s) => ({
-          name: s.title,
-          is_complete: !!s.completed,
-        })),
+        date_end: goal.deadline || null,
+        status: 'active',
+        subtasks: (goal.subtasks ?? []).map((s) => ({ name: s.title.trim(), is_complete: !!s.completed })),
+        team_id: typeof teamId === 'number' ? teamId : undefined,
       };
       const created = await createUserGoal(payload);
       onSave({ ...goal, __server: created });
@@ -267,10 +265,10 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
     </Modal>
   );
 
+  // STEP 1
   if (step === 1) {
     return (
       <View {...({ className: 'flex-1 w-full bg-background' } as any)}>
-        {/* Header */}
         <View {...({ className: 'w-full flex-row items-center justify-between px-4 py-3 border-b border-border' } as any)}>
           <Button variant="ghost" size="sm" onPress={handleBackPress}>
             <ArrowLeft size={16} color="#fff" />
@@ -280,15 +278,10 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
         </View>
 
         <ScrollView contentContainerStyle={{ paddingBottom: 24 }} {...({ className: 'w-full px-4 py-4' } as any)} showsVerticalScrollIndicator={false}>
-          {/* Goal Info */}
           <Card {...({ className: 'w-full p-5 rounded-2xl border-transparent mb-5' } as any)}>
             <View {...({ className: 'mb-4' } as any)}>
               <Label {...({ className: 'text-sm font-medium text-white mb-2' } as any)}>Название цели</Label>
-              <Input
-                value={goal.title}
-                onChangeText={(text) => setGoal((prev) => ({ ...prev, title: text }))}
-                placeholder="Например: Изучить React"
-              />
+              <Input value={goal.title} onChangeText={(text) => setGoal((prev) => ({ ...prev, title: text }))} placeholder="Например: Изучить React" />
             </View>
 
             <View {...({ className: 'mb-4' } as any)}>
@@ -305,34 +298,18 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
 
             <View>
               <Label {...({ className: 'text-sm font-medium text-white mb-2' } as any)}>Описание (опционально)</Label>
-              <Textarea
-                value={goal.description}
-                onChangeText={(text) => setGoal((prev) => ({ ...prev, description: text }))}
-                placeholder="Подробнее о цели..."
-                rows={3}
-              />
+              <Textarea value={goal.description} onChangeText={(text) => setGoal((prev) => ({ ...prev, description: text }))} placeholder="Подробнее о цели..." rows={3} />
             </View>
           </Card>
 
-          {/* Category Selection */}
           <View {...({ className: 'mb-4' } as any)}>
             <Label {...({ className: 'text-sm font-medium text-white mb-3' } as any)}>Сфера жизни</Label>
             <View {...({ className: 'flex-row flex-wrap -mx-1' } as any)}>
               {categories.map((category) => {
                 const active = goal.category === category.id;
                 return (
-                  <Pressable
-                    key={category.id}
-                    onPress={() => setGoal((prev) => ({ ...prev, category: category.id }))}
-                    {...({ className: 'w-1/2 px-1 mb-2' } as any)}
-                  >
-                    <View
-                      {...({
-                        className:
-                          'p-3 rounded-xl border-2 transition-all ' +
-                          (active ? 'border-primary bg-primary/5' : 'border-border'),
-                      } as any)}
-                    >
+                  <Pressable key={category.id} onPress={() => setGoal((prev) => ({ ...prev, category: category.id }))} {...({ className: 'w-1/2 px-1 mb-2' } as any)}>
+                    <View {...({ className: 'p-3 rounded-xl border-2 transition-all ' + (active ? 'border-primary bg-primary/5' : 'border-border') } as any)}>
                       <View {...({ className: 'flex-row items-center' } as any)}>
                         <Text {...({ className: 'text-lg mr-2' } as any)}>{category.emoji}</Text>
                         <Text {...({ className: 'text-sm font-medium text-foreground' } as any)}>{category.label}</Text>
@@ -344,24 +321,28 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
             </View>
           </View>
 
-          {/* Team Goal Toggle */}
           <Card {...({ className: 'w-full p-5 rounded-2xl mb-4' } as any)}>
             <View {...({ className: 'flex-row items-center justify-between' } as any)}>
               <View {...({ className: 'flex-row items-center' } as any)}>
                 <Users size={20} color={goal.isTeam ? PRIMARY : MUTED} />
                 <View {...({ className: 'ml-2' } as any)}>
-                  <Text {...({ className: 'font-medium text-white mb-1' } as any)}>Командная цель</Text>
-                  <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>Пригласить участников</Text>
+                  <Text {...({ className: 'font-medium text-white mb-1' } as any)}>
+                    Командная цель {teamId ? '(выбрана команда)' : ''}
+                  </Text>
+                  <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>
+                    {teamId ? 'Цель будет создана в выбранной команде' : 'Пригласить участников'}
+                  </Text>
                 </View>
               </View>
               <Button
                 variant={goal.isTeam ? 'default' : 'outline'}
                 size="sm"
-                onPress={() => setGoal((prev) => ({ ...prev, isTeam: !prev.isTeam }))}
+                onPress={() => {
+                  if (teamId) return;
+                  setGoal((prev) => ({ ...prev, isTeam: !prev.isTeam }));
+                }}
               >
-                <Text {...({ className: goal.isTeam ? 'text-primary-foreground' : 'text-primary' } as any)}>
-                  {goal.isTeam ? 'Да' : 'Нет'}
-                </Text>
+                <Text {...({ className: goal.isTeam ? 'text-primary-foreground' : 'text-primary' } as any)}>{goal.isTeam ? 'Да' : 'Нет'}</Text>
               </Button>
             </View>
           </Card>
@@ -376,10 +357,10 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
     );
   }
 
+  // STEP 2
   if (step === 2) {
     return (
       <View {...({ className: 'flex-1 w-full bg-background' } as any)}>
-        {/* Header */}
         <View {...({ className: 'w-full flex-row items-center justify-between px-4 py-3 border-b border-border' } as any)}>
           <Button variant="ghost" size="sm" onPress={handleBackPress}>
             <ArrowLeft size={16} color="#fff" />
@@ -389,36 +370,21 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
         </View>
 
         <ScrollView contentContainerStyle={{ paddingBottom: 24 }} {...({ className: 'w-full px-4 py-4' } as any)} showsVerticalScrollIndicator={false}>
-          {/* Duration */}
           <View {...({ className: 'mb-4' } as any)}>
             <Label {...({ className: 'text-sm font-medium text-white mb-3' } as any)}>Срок выполнения</Label>
             {durations.map((duration) => {
               const active = goal.duration === duration.id;
-
-              const monthsToAdd =
-                duration.id === 'short' ? 3 :
-                duration.id === 'medium' ? 6 : 12;
-
+              const monthsToAdd = duration.id === 'short' ? 3 : duration.id === 'medium' ? 6 : 12;
               return (
                 <Pressable
                   key={duration.id}
                   onPress={() => {
                     const newDeadline = addMonthsClamp(new Date(), monthsToAdd);
-                    setGoal((prev) => ({
-                      ...prev,
-                      duration: duration.id,
-                      deadline: toISODate(newDeadline),
-                    }));
+                    setGoal((prev) => ({ ...prev, duration: duration.id, deadline: toISODate(newDeadline) }));
                   }}
                   {...({ className: 'mb-2' } as any)}
                 >
-                  <View
-                    {...({
-                      className:
-                        'w-full p-3 rounded-xl border-2 transition-all ' +
-                        (active ? 'border-primary bg-primary/5' : 'border-border'),
-                    } as any)}
-                  >
+                  <View {...({ className: 'w-full p-3 rounded-xl border-2 transition-all ' + (active ? 'border-primary bg-primary/5' : 'border-border') } as any)}>
                     <View {...({ className: 'flex-row items-center justify-between' } as any)}>
                       <View>
                         <Text {...({ className: 'font-medium text-white mb-1' } as any)}>{duration.label}</Text>
@@ -432,16 +398,10 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
             })}
           </View>
 
-          {/* Deadline with picker */}
           <Card {...({ className: 'w-full p-5 rounded-2xl mb-4' } as any)}>
             <Label {...({ className: 'text-sm font-medium text-white mb-2' } as any)}>Конечная дата</Label>
             <Pressable onPress={() => setDatePickerVisible(true)} {...({ className: 'flex-row items-center' } as any)}>
-              <Input
-                value={goal.deadline ? formatDisplayDate(goal.deadline) : ''}
-                editable={false}
-                placeholder="Выберите дату"
-                {...({ className: 'flex-1 mr-2' } as any)}
-              />
+              <Input value={goal.deadline ? formatDisplayDate(goal.deadline) : ''} editable={false} placeholder="Выберите дату" {...({ className: 'flex-1 mr-2' } as any)} />
               <CalendarIcon size={16} color={MUTED} />
             </Pressable>
           </Card>
@@ -451,7 +411,6 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
           </Button>
         </ScrollView>
 
-        {/* Web календарь */}
         {Platform.OS === 'web' && (
           <Modal visible={isDatePickerVisible} transparent animationType="fade" onRequestClose={() => setDatePickerVisible(false)}>
             <Pressable onPress={() => setDatePickerVisible(false)} {...({ className: 'flex-1 bg-black/60' } as any)} />
@@ -459,11 +418,7 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
               <Text {...({ className: 'text-white text-base font-semibold mb-3' } as any)}>Выберите дату</Text>
               <RNCalendar
                 initialDate={goal.deadline || toISODate(new Date())}
-                markedDates={
-                  goal.deadline
-                    ? { [goal.deadline]: { selected: true, selectedColor: PRIMARY, selectedTextColor: '#fff' } }
-                    : undefined
-                }
+                markedDates={goal.deadline ? { [goal.deadline]: { selected: true, selectedColor: PRIMARY, selectedTextColor: '#fff' } } : undefined}
                 onDayPress={(day) => {
                   setGoal((prev) => ({ ...prev, deadline: day.dateString }));
                   setDatePickerVisible(false);
@@ -488,7 +443,6 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
           </Modal>
         )}
 
-        {/* iOS/Android пикер */}
         {Platform.OS !== 'web' && NativeDatePicker && (
           <NativeDatePicker
             isVisible={isDatePickerVisible}
@@ -506,33 +460,29 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
     );
   }
 
+  // STEP 3
   if (step === 3) {
     return (
       <View {...({ className: 'flex-1 w-full bg-background' } as any)}>
-        {/* Header */}
         <View {...({ className: 'w-full flex-row items-center justify-between px-4 py-3 border-b border-border' } as any)}>
           <Button variant="ghost" size="sm" onPress={handleBackPress}>
             <ArrowLeft size={16} color="#fff" />
           </Button>
-          <Text {...({ className: 'font-semibold text-white' } as any)}>План подцелей</Text>
-          <View {...({ className: 'w-8' } as any)} />
         </View>
 
         <ScrollView contentContainerStyle={{ paddingBottom: 24 }} {...({ className: 'w-full px-4 py-4' } as any)} showsVerticalScrollIndicator={false}>
-          {/* Summary */}
           <Card {...({ className: 'w-full p-4 rounded-2xl bg-gradient-card mb-4' } as any)}>
             <View {...({ className: 'flex-row items-center mb-2' } as any)}>
               <Text {...({ className: 'text-2xl mr-2' } as any)}>{goal.icon}</Text>
               <View>
                 <Text {...({ className: 'font-semibold text-white mb-1' } as any)}>{goal.title}</Text>
                 <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>
-                  {categories.find((c) => c.id === goal.category)?.label} • {goal.deadline || 'дата не указана'}
+                  {categories.find((c) => c.id === goal.category)?.label || '—'} • {goal.deadline || 'дата не указана'}
                 </Text>
               </View>
             </View>
           </Card>
 
-          {/* AI CTA */}
           {!goal.subtasks.length && !showAIDecomposition && !editSubtasks && (
             <Card {...({ className: 'w-full p-6 rounded-2xl items-center text-center mb-4' } as any)}>
               <View {...({ className: 'w-16 h-16 rounded-full bg-gradient-primary items-center justify-center mb-3' } as any)}>
@@ -559,7 +509,16 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
             </Card>
           )}
 
-          {/* Редактирование вручную */}
+          {showAIDecomposition && (
+            <Card {...({ className: 'w-full p-6 rounded-2xl items-center text-center mb-4' } as any)}>
+              <View {...({ className: 'w-16 h-16 rounded-full bg-gradient-primary items-center justify-center mb-3' } as any)}>
+                <Brain size={32} color="#fff" />
+              </View>
+              <Text {...({ className: 'font-semibold text-white mb-2' } as any)}>AI думает...</Text>
+              <Text {...({ className: 'text-muted-foreground text-sm' } as any)}>Анализирую вашу цель и создаю оптимальный план</Text>
+            </Card>
+          )}
+
           {editSubtasks && (
             <Card {...({ className: 'w-full p-4 rounded-2xl mb-4' } as any)}>
               <View {...({ className: 'flex-row items-center justify-between mb-3' } as any)}>
@@ -579,11 +538,7 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
                       {s.completed ? <CheckSquare size={18} color={PRIMARY} /> : <Square size={18} color={MUTED} />}
                     </Pressable>
                     <View {...({ className: 'flex-1' } as any)}>
-                      <Input
-                        value={s.title}
-                        onChangeText={(txt) => updateDraftTitle(s.id, txt)}
-                        placeholder={`Шаг ${idx + 1}`}
-                      />
+                      <Input value={s.title} onChangeText={(txt) => updateDraftTitle(s.id, txt)} placeholder={`Шаг ${idx + 1}`} />
                     </View>
                     <Pressable onPress={() => removeDraftSubtask(s.id)} {...({ className: 'p-2 rounded-lg active:opacity-80' } as any)}>
                       <Trash2 size={16} color="#f87171" />
@@ -591,9 +546,7 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
                   </View>
                 ))}
                 {draftSubtasks.length === 0 && (
-                  <Text {...({ className: 'text-muted-foreground text-xs' } as any)}>
-                    Пока подзадач нет. Нажмите “Добавить”, чтобы создать первую.
-                  </Text>
+                  <Text {...({ className: 'text-muted-foreground text-xs' } as any)}>Пока подзадач нет. Нажмите “Добавить”, чтобы создать первую.</Text>
                 )}
               </View>
 
@@ -608,7 +561,6 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
             </Card>
           )}
 
-          {/* Список подзадач (просмотр) */}
           {!editSubtasks && goal.subtasks.length > 0 && (
             <View>
               <View {...({ className: 'flex-row items-center justify-between mb-3' } as any)}>
@@ -628,18 +580,10 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
                         <Text {...({ className: 'text-xs font-medium text-foreground' } as any)}>{index + 1}</Text>
                       </View>
                       <View {...({ className: 'flex-1' } as any)}>
-                        <Text {...({ className: 'text-sm font-medium text-white mb-1' } as any)}>
-                          {subtask.title || `Шаг ${index + 1}`}
-                        </Text>
-                        {!!subtask.deadline && (
-                          <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>{subtask.deadline}</Text>
-                        )}
+                        <Text {...({ className: 'text-sm font-medium text-white mb-1' } as any)}>{subtask.title || `Шаг ${index + 1}`}</Text>
+                        {!!subtask.deadline && <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>{subtask.deadline}</Text>}
                       </View>
-                      {subtask.completed ? (
-                        <CheckSquare size={16} color={PRIMARY} />
-                      ) : (
-                        <Square size={16} color={MUTED} />
-                      )}
+                      {subtask.completed ? <CheckSquare size={16} color={PRIMARY} /> : <Square size={16} color={MUTED} />}
                     </View>
                   </Card>
                 ))}
@@ -647,18 +591,11 @@ export const CreateGoal = ({ onBack, onSave }: CreateGoalProps) => {
             </View>
           )}
 
-          {/* Действия внизу */}
           <View {...({ className: 'mt-4' } as any)}>
-            <Button
-              onPress={saveToDb}
-              disabled={saving}
-              {...({ className: 'w-full rounded-2xl h-12' } as any)}
-            >
+            <Button onPress={saveToDb} disabled={saving} {...({ className: 'w-full rounded-2xl h-12' } as any)}>
               <View {...({ className: 'flex-row items-center justify-center' } as any)}>
                 <Target size={16} color="#fff" />
-                <Text {...({ className: 'ml-2 text-primary-foreground font-semibold' } as any)}>
-                  {saving ? 'Сохранение...' : 'Сохранить цель'}
-                </Text>
+                <Text {...({ className: 'ml-2 text-primary-foreground font-semibold' } as any)}>{saving ? 'Сохранение...' : 'Сохранить цель'}</Text>
               </View>
             </Button>
           </View>

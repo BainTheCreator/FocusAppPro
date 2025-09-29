@@ -147,7 +147,7 @@ export const Onboarding = ({ onComplete }: OnboardingProps) => {
               {currentSlide === slides.length - 1 ? 'Начать' : 'Далее'}
             </Text>
             {currentSlide < slides.length - 1 && (
-              <ChevronRight size={18} color="#6366f1" {...({ className: 'ml-2' } as any)} />
+              <ChevronRight size={18} color="#35D07F" {...({ className: 'ml-2' } as any)} />
             )}
           </View>
         </Button>

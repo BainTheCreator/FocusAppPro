@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, Pressable } from 'react-native';
 import { Send, Shield, ChevronLeft } from 'lucide-react-native';
 
-type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'email';
+type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'wallet';
 
 type LoginProps = {
   onLoginWith?: (provider: Provider) => void;
@@ -41,17 +41,24 @@ export function Login({ onLoginWith, onSkip }: LoginProps) {
         </Pressable>
 
         <Pressable
-          onPress={() => onLoginWith?.('qr')}
-          {...({ className: 'mt-3 w-full rounded-xl border border-border py-3 items-center justify-center active:opacity-90' } as any)}
+          onPress={() => onLoginWith?.('google')}
+          {...({ className: 'mt-3 w-full rounded-xl bg-white border border-border py-3 items-center justify-center active:opacity-90' } as any)}
         >
-          <Text {...({ className: 'text-foreground text-base font-medium' } as any)}>Показать QR‑код</Text>
+          <Text {...({ className: 'text-black text-base font-semibold' } as any)}>Продолжить с Google</Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => onLoginWith?.('wallet')}
+          {...({ className: 'mt-3 w-full rounded-xl border border-primary bg-primary py-3 items-center justify-center active:opacity-90' } as any)}
+        >
+          <Text {...({ className: 'text-foreground text-base font-semibold' } as any)}>Войти через крипто-кошелёк</Text>
         </Pressable>
 
         <View {...({ className: 'mt-6 w-full px-4 py-3 rounded-xl bg-card border border-border' } as any)}>
           <View {...({ className: 'flex-row items-start' } as any)}>
             <Shield size={18} color="#35D07F" />
             <Text {...({ className: 'ml-2 flex-1 text-sm text-muted-foreground' } as any)}>
-              Мы не получаем доступ к вашим личным данным без согласия. При входе через Telegram подтверждается только ваш ID и имя.
+              Мы не получаем доступ к вашим личным данным без согласия. При входе подтверждается только ваш ID, имя и email.
             </Text>
           </View>
         </View>

@@ -1,12 +1,11 @@
 // lib/api/goals.ts
 import { supabase, FUNCTIONS_BASE } from '@/lib/supabase';
 
-/* ===== Типы ===== */
 export type CreateGoalPayload = {
   title: string;
   description?: string | null;
   icon?: string | null;
-  date_end?: string | null; // YYYY-MM-DD
+  date_end?: string | null;
   status?: 'active' | 'paused' | 'completed';
   subtasks?: Array<{ name: string; is_complete?: boolean }>;
 };
@@ -43,36 +42,58 @@ export type UiGoal = {
   createdAt?: number | null;
   lastActivityAt?: number | null;
   completedAt?: number | null;
+  subtasks?: DbSubtask[];
 };
 
-/* ===== Создание ===== */
-export async function createUserGoal(payload: CreateGoalPayload) {
-  const token = (await supabase.auth.getSession()).data.session?.access_token;
+async function requireToken() {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token ?? null;
+  console.log('[auth] token?', !!token); // лог ДО проверки
   if (!token) throw new Error('Not authenticated');
+  return token;
+}
 
+export async function createUserGoal(payload: CreateGoalPayload & { team_id?: number }) {
+  const token = await requireToken();
   const res = await fetch(`${FUNCTIONS_BASE}/goal-create`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
   });
-
   const text = await res.text();
   if (!res.ok) throw new Error(text || `goal-create failed (${res.status})`);
   return text ? (JSON.parse(text) as { target: any; subtasks: any[]; rid: string }) : { target: null, subtasks: [], rid: '' };
 }
 
-/* ===== Список целей (с прогрессом) ===== */
 export async function fetchGoals(): Promise<UiGoal[]> {
-  const { data, error } = await supabase
-    .from('user_targets')
-    .select(
-      'id, created_at, name, description, icon, date_end, status, last_activity_at, completed_at, target_target ( id, is_complete, target_id )'
-    )
-    .order('created_at', { ascending: false });
+  const token = await requireToken();
+  console.log('[goals] start');
 
-  if (error) throw error;
+  // простой таймаут, чтобы не висеть бесконечно (диагностика)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
 
-  const rows = (data ?? []) as DbGoal[];
+  const res = await fetch(`${FUNCTIONS_BASE}/goals-list`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: '{}',
+    signal: controller.signal,
+  }).catch((e) => {
+    console.warn('[goals] fetch error', e?.message || e);
+    throw e;
+  })
+  .finally(() => clearTimeout(timer));
+
+  const text = await res.text();
+  if (!res.ok) {
+    console.warn('[goals] http error', res.status, text);
+    throw new Error(text || 'goals-list failed');
+  }
+
+  const json = JSON.parse(text || '{}');
+  const rows = (json.goals ?? []) as DbGoal[];
+
+  console.log('[goals] ok, count:', rows.length);
 
   return rows.map((g) => {
     const subs = g.target_target ?? [];
@@ -92,50 +113,43 @@ export async function fetchGoals(): Promise<UiGoal[]> {
       createdAt: g.created_at ? Date.parse(g.created_at) : null,
       lastActivityAt: g.last_activity_at ? Date.parse(g.last_activity_at) : null,
       completedAt: g.completed_at ? Date.parse(g.completed_at) : null,
-    };
+      subtasks: subs,
+    } as UiGoal;
   });
 }
 
-/* ===== Детали цели ===== */
-export async function fetchGoalDetail(goalId: number) {
-  const { data, error } = await supabase
-    .from('target_target')
-    .select('id, name, is_complete, target_id')
-    .eq('target_id', goalId)
-    .order('id', { ascending: true });
-
-  if (error) throw error;
-  return (data ?? []) as DbSubtask[];
-}
-
-/* ===== Тоггл подзадачи ===== */
 export async function toggleSubtask(subtaskId: number, next?: boolean) {
-  const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
-
+  const token = await requireToken();
   const res = await fetch(`${FUNCTIONS_BASE}/goal-toggle-subtask`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify({ subtask_id: subtaskId, is_complete: next }),
   });
-
   const text = await res.text();
   if (!res.ok) throw new Error(text || 'toggle-subtask failed');
   return JSON.parse(text) as { subtask: DbSubtask; progress: number; rid: string };
 }
 
-/* ===== Смена статуса ===== */
 export async function setGoalStatus(targetId: number, status: 'active' | 'paused' | 'completed') {
-  const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
-
+  const token = await requireToken();
   const res = await fetch(`${FUNCTIONS_BASE}/goal-set-status`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify({ target_id: targetId, status }),
   });
-
   const text = await res.text();
   if (!res.ok) throw new Error(text || 'goal-set-status failed');
   return JSON.parse(text) as { target: any; rid: string };
+}
+
+export async function addSubtasks(targetId: number, steps: { name: string }[]) {
+  const token = await requireToken();
+  const res = await fetch(`${FUNCTIONS_BASE}/goal-add-subtasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ target_id: targetId, steps }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || 'goal-add-subtasks failed');
+  return JSON.parse(text) as { subtasks: DbSubtask[] };
 }

@@ -2,41 +2,24 @@
   "expo": {
     "name": "FocusAppPro",
     "slug": "FocusAppPro",
+    "owner": "ВАШ_EXPO_USERNAME",
     "scheme": "goalsapp",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+    "android": {
+      "package": "app.goals.focuspro",
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#ffffff" },
+      "intentFilters": [
+        { "action": "VIEW", "data": [{ "scheme": "goalsapp" }], "category": ["BROWSABLE", "DEFAULT"] }
+      ]
     },
     "ios": {
+      "bundleIdentifier": "app.goals.focuspro",
       "supportsTablet": true
     },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
-      "edgeToEdgeEnabled": true
-    },
-    "androidStatusBar": {
-      "translucent": true,
-      "backgroundColor": "transparent",
-      "barStyle": "light-content"
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
-    "plugins": [
-      "expo-web-browser"
-    ],
+    "plugins": ["expo-web-browser"],
     "extra": {
       "EXPO_PUBLIC_SUPABASE_URL": "https://vcptshxtznnmjvrspztp.supabase.co",
-      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_08-vBXg4aJ-ck7pBR_jZ5w_aDcAHwCx"
+      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_..."
     }
   }
 }

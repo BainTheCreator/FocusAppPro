@@ -1,28 +1,12 @@
-// Library.tsx — тянется по ширине (без колонок) + зелёные акценты + фикс иконки поиска
 import React, { useMemo, useState } from 'react';
-import { View, Text, ScrollView, Pressable } from 'react-native';
+import { View, Text, ScrollView, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import {
-  ArrowLeft,
-  Search as SearchIcon,
-  Plus,
-  Users,
-  Clock,
-  Filter,
-  Star,
-} from 'lucide-react-native';
-
-const goalTemplates = [
-  { id: 1, title: 'Изучить программирование', category: 'Навыки', icon: '💻', duration: '6 месяцев', difficulty: 'Средняя', rating: 4.8, users: 1240, isTeam: false, subtasks: 8, description: 'Полный курс изучения веб-разработки от основ до продвинутого уровня' },
-  { id: 2, title: 'Марафон за 6 месяцев', category: 'Состояние', icon: '🏃‍♂️', duration: '6 месяцев', difficulty: 'Высокая', rating: 4.9, users: 856, isTeam: false, subtasks: 12, description: 'Подготовка к марафону с нуля: тренировки, питание, восстановление' },
-  { id: 3, title: 'Командный проект', category: 'Действия', icon: '🚀', duration: '3 месяца', difficulty: 'Средняя', rating: 4.6, users: 432, isTeam: true, subtasks: 15, description: 'Запуск стартапа в команде: от идеи до MVP' },
-  { id: 4, title: 'Финансовая грамотность', category: 'Капитал', icon: '💰', duration: '2 месяца', difficulty: 'Легкая', rating: 4.7, users: 2103, isTeam: false, subtasks: 6, description: 'Основы инвестирования и планирования личного бюджета' },
-  { id: 5, title: 'Изучение языка', category: 'Навыки', icon: '🗣️', duration: '12 месяцев', difficulty: 'Средняя', rating: 4.5, users: 1876, isTeam: false, subtasks: 20, description: 'Английский с нуля до разговорного уровня' },
-  { id: 6, title: 'Семейные традиции', category: 'Семья', icon: '👨‍👩‍👧‍👦', duration: '1 год', difficulty: 'Легкая', rating: 4.9, users: 543, isTeam: true, subtasks: 10, description: 'Создание новых семейных традиций и укрепление отношений' },
-];
+import { ArrowLeft, Search as SearchIcon, Plus, Users, Clock, Filter, Star } from 'lucide-react-native';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchGoalTemplates, addGoalFromTemplate, type UiTemplate } from '@/lib/api/templates';
 
 const categories = [
   { id: 'all', label: 'Все' },
@@ -37,7 +21,17 @@ function getCategoryLabelById(id: string) {
   return categories.find((c) => c.id === id)?.label;
 }
 
-const GoalTemplate = ({ template, onAdd }: { template: any; onAdd: () => void }) => (
+const PRIMARY = '#35D07F';
+
+const GoalTemplate = ({
+  template,
+  onAdd,
+  adding,
+}: {
+  template: UiTemplate;
+  onAdd: () => void;
+  adding?: boolean;
+}) => (
   <Card {...({ className: 'w-full self-stretch p-4 bg-gradient-card shadow-medium border-0 transition-all duration-300' } as any)}>
     <View {...({ className: 'flex-row items-start justify-between mb-3' } as any)}>
       <View {...({ className: 'flex-row items-center space-x-3' } as any)}>
@@ -50,7 +44,7 @@ const GoalTemplate = ({ template, onAdd }: { template: any; onAdd: () => void })
       {template.isTeam ? (
         <Badge variant="secondary" {...({ className: 'px-2 py-0.5' } as any)}>
           <View {...({ className: 'flex-row items-center' } as any)}>
-            <Users size={12} color="#35D07F" {...({ className: 'mr-1' } as any)} />
+            <Users size={12} color={PRIMARY} {...({ className: 'mr-1' } as any)} />
             <Text {...({ className: 'text-xs text-secondary-foreground' } as any)}>Команда</Text>
           </View>
         </Badge>
@@ -63,14 +57,18 @@ const GoalTemplate = ({ template, onAdd }: { template: any; onAdd: () => void })
 
     <View {...({ className: 'flex-row items-center justify-between mb-4' } as any)}>
       <View {...({ className: 'flex-row items-center space-x-4' } as any)}>
-        <View {...({ className: 'flex-row items-center space-x-1' } as any)}>
-          <Clock size={12} color="#9ca3af" />
-          <Text {...({ className: 'text-xs text-muted-foreground ml-1' } as any)}>{template.duration}</Text>
-        </View>
-        <View {...({ className: 'flex-row items-center space-x-1 ml-2' } as any)}>
-          <Star size={12} color="#FACC15" fill="#FACC15" />
-          <Text {...({ className: 'text-xs text-muted-foreground ml-1' } as any)}>{template.rating}</Text>
-        </View>
+        {template.duration ? (
+          <View {...({ className: 'flex-row items-center space-x-1' } as any)}>
+            <Clock size={12} color="#9ca3af" />
+            <Text {...({ className: 'text-xs text-muted-foreground ml-1' } as any)}>{template.duration}</Text>
+          </View>
+        ) : null}
+        {typeof template.rating === 'number' ? (
+          <View {...({ className: 'flex-row items-center space-x-1 ml-2' } as any)}>
+            <Star size={12} color="#FACC15" fill="#FACC15" />
+            <Text {...({ className: 'text-xs text-muted-foreground ml-1' } as any)}>{template.rating.toFixed(1)}</Text>
+          </View>
+        ) : null}
         <Text {...({ className: 'text-xs text-muted-foreground' } as any)}>{template.users} чел.</Text>
       </View>
 
@@ -79,10 +77,16 @@ const GoalTemplate = ({ template, onAdd }: { template: any; onAdd: () => void })
       </Badge>
     </View>
 
-    <Button onPress={onAdd} size="sm" {...({ className: 'w-full rounded-xl' } as any)}>
+    <Button onPress={onAdd} size="sm" disabled={adding} {...({ className: 'w-full rounded-xl' } as any)}>
       <View {...({ className: 'flex-row items-center justify-center' } as any)}>
-        <Plus size={12} color="#fff" {...({ className: 'mr-2' } as any)} />
-        <Text {...({ className: 'text-primary-foreground' } as any)}>Добавить цель</Text>
+        {adding ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <>
+            <Plus size={12} color="#fff" {...({ className: 'mr-2' } as any)} />
+            <Text {...({ className: 'text-primary-foreground' } as any)}>Добавить цель</Text>
+          </>
+        )}
       </View>
     </Button>
   </Card>
@@ -90,35 +94,57 @@ const GoalTemplate = ({ template, onAdd }: { template: any; onAdd: () => void })
 
 interface LibraryProps {
   onBack: () => void;
-  onAddGoal: (template: any) => void;
+  onAdded?: (newTargetId: number) => void;
   extraBottomPadding?: number;
+  teamId?: number | null;
+  isAuthed: boolean; // ← важный флаг
 }
 
-export const Library = ({ onBack, onAddGoal, extraBottomPadding = 0 }: LibraryProps) => {
+export const Library = ({ onBack, onAdded, extraBottomPadding = 0, teamId = null, isAuthed }: LibraryProps) => {
+  const qc = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [filterType, setFilterType] = useState<'all' | 'personal' | 'team'>('all');
+  const [addingId, setAddingId] = useState<number | null>(null);
+
+  const { data: templates = [], isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: ['goal_templates'],
+    queryFn: fetchGoalTemplates,
+    staleTime: 60_000,
+    enabled: !!isAuthed, // ← грузим только после авторизации
+  });
 
   const filteredTemplates = useMemo(() => {
     const label = getCategoryLabelById(selectedCategory);
-    return goalTemplates.filter((template) => {
+    return templates.filter((template) => {
       const q = searchQuery.trim().toLowerCase();
       const matchesSearch =
         q.length === 0 ||
         template.title.toLowerCase().includes(q) ||
-        template.description.toLowerCase().includes(q);
-
-      const matchesCategory =
-        selectedCategory === 'all' || template.category === label;
-
+        (template.description || '').toLowerCase().includes(q);
+      const matchesCategory = selectedCategory === 'all' || template.category === label;
       const matchesType =
         filterType === 'all' ||
         (filterType === 'team' && template.isTeam) ||
         (filterType === 'personal' && !template.isTeam);
-
       return matchesSearch && matchesCategory && matchesType;
     });
-  }, [searchQuery, selectedCategory, filterType]);
+  }, [templates, searchQuery, selectedCategory, filterType]);
+
+  const handleAdd = async (tpl: UiTemplate) => {
+    try {
+      setAddingId(tpl.id);
+      const newId = await addGoalFromTemplate(tpl.id, { teamId });
+      qc.invalidateQueries({ queryKey: ['goals'] });
+      qc.invalidateQueries({ queryKey: ['goal_templates'] });
+      if (onAdded) onAdded(newId);
+      else Alert.alert('Готово', 'Цель добавлена в ваши цели');
+    } catch (e: any) {
+      Alert.alert('Ошибка', e?.message || 'Не удалось добавить цель');
+    } finally {
+      setAddingId(null);
+    }
+  };
 
   return (
     <View {...({ className: 'min-h-screen w-full flex-1 bg-background' } as any)}>
@@ -129,7 +155,7 @@ export const Library = ({ onBack, onAddGoal, extraBottomPadding = 0 }: LibraryPr
             <ArrowLeft size={16} color="#fff" />
           </Button>
           <Text {...({ className: 'font-semibold text-white' } as any)}>Библиотека целей</Text>
-          <Button variant="ghost" size="sm" {...({ className: 'text-white' } as any)}>
+          <Button variant="ghost" size="sm" onPress={() => refetch()} disabled={!isAuthed} {...({ className: 'text-white' } as any)}>
             <Filter size={16} color="#fff" />
           </Button>
         </View>
@@ -143,6 +169,7 @@ export const Library = ({ onBack, onAddGoal, extraBottomPadding = 0 }: LibraryPr
             value={searchQuery}
             onChangeText={setSearchQuery}
             placeholder="Поиск целей..."
+            editable={isAuthed}
             {...({
               className:
                 'h-11 w-full pl-12 pr-3 rounded-xl bg-white/10 border-white/20 text-white placeholder:text-white/60 focus:border-primary',
@@ -158,87 +185,106 @@ export const Library = ({ onBack, onAddGoal, extraBottomPadding = 0 }: LibraryPr
         contentContainerStyle={{ paddingBottom: 24 + extraBottomPadding }}
         {...({ className: 'w-full px-4 -mt-2' } as any)}
       >
-        {/* Filters */}
-        <Card {...({ className: 'w-full self-stretch rounded-2xl p-4 shadow-medium mb-4' } as any)}>
-          {/* Type Filter */}
-          <View {...({ className: 'flex-row bg-muted rounded-xl p-1 mb-3' } as any)}>
-            {[
-              { key: 'all', label: 'Все' },
-              { key: 'personal', label: 'Личные' },
-              { key: 'team', label: 'Команда' },
-            ].map((type) => {
-              const active = filterType === (type.key as any);
-              return (
-                <Pressable
-                  key={type.key}
-                  onPress={() => setFilterType(type.key as any)}
-                  {...({
-                    className:
-                      'flex-1 rounded-lg items-center justify-center py-2 px-3 transition-all ' +
-                      (active ? 'bg-primary/15 border border-primary/30' : 'bg-transparent'),
-                  } as any)}
-                >
-                  <Text
-                    {...({
-                      className:
-                        'text-sm font-medium ' +
-                        (active ? 'text-primary' : 'text-muted-foreground'),
-                    } as any)}
-                  >
-                    {type.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {/* Category Filter */}
-          <View {...({ className: 'flex-row flex-wrap gap-2' } as any)}>
-            {categories.map((category) => {
-              const active = selectedCategory === category.id;
-              return (
-                <Pressable
-                  key={category.id}
-                  onPress={() => setSelectedCategory(category.id)}
-                  {...({
-                    className:
-                      'px-3 py-1 rounded-full transition-all ' +
-                      (active ? 'bg-primary' : 'bg-muted'),
-                  } as any)}
-                >
-                  <Text
-                    {...({
-                      className:
-                        'text-xs font-medium ' +
-                        (active ? 'text-primary-foreground' : 'text-muted-foreground'),
-                    } as any)}
-                  >
-                    {category.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </Card>
-
-        {/* Results — одна колонка, растягивается по ширине */}
-        <View {...({ className: 'w-full self-stretch space-y-4' } as any)}>
-          {filteredTemplates.map((template) => (
-            <GoalTemplate key={template.id} template={template} onAdd={() => onAddGoal(template)} />
-          ))}
-
-          {filteredTemplates.length === 0 && (
-            <View {...({ className: 'w-full items-center py-8' } as any)}>
-              <View {...({ className: 'w-16 h-16 rounded-full bg-muted items-center justify-center mb-4' } as any)}>
-                <SearchIcon size={32} color="#9ca3af" />
-              </View>
-              <Text {...({ className: 'font-semibold text-foreground mb-2' } as any)}>Ничего не найдено</Text>
-              <Text {...({ className: 'text-sm text-muted-foreground text-center' } as any)}>
-                Попробуйте изменить фильтры или поисковый запрос
-              </Text>
+        {!isAuthed ? (
+          <View {...({ className: 'w-full items-center py-16' } as any)}>
+            <View {...({ className: 'w-16 h-16 rounded-full bg-muted items-center justify-center mb-4' } as any)}>
+              <SearchIcon size={32} color="#9ca3af" />
             </View>
-          )}
-        </View>
+            <Text {...({ className: 'font-semibold text-foreground mb-2' } as any)}>Требуется вход</Text>
+            <Text {...({ className: 'text-sm text-muted-foreground text-center' } as any)}>
+              Войдите в аккаунт, чтобы просматривать и добавлять цели из библиотеки.
+            </Text>
+          </View>
+        ) : (
+          <>
+            {/* Filters */}
+            <Card {...({ className: 'w-full self-stretch rounded-2xl p-4 shadow-medium mb-4' } as any)}>
+              {/* Type Filter */}
+              <View {...({ className: 'flex-row bg-muted rounded-xl p-1 mb-3' } as any)}>
+                {[
+                  { key: 'all', label: 'Все' },
+                  { key: 'personal', label: 'Личные' },
+                  { key: 'team', label: 'Команда' },
+                ].map((type) => {
+                  const active = filterType === (type.key as any);
+                  return (
+                    <Pressable
+                      key={type.key}
+                      onPress={() => setFilterType(type.key as any)}
+                      {...({
+                        className:
+                          'flex-1 rounded-lg items-center justify-center py-2 px-3 transition-all ' +
+                          (active ? 'bg-primary/15 border border-primary/30' : 'bg-transparent'),
+                      } as any)}
+                    >
+                      <Text
+                        {...({
+                          className: 'text-sm font-medium ' + (active ? 'text-primary' : 'text-muted-foreground'),
+                        } as any)}
+                      >
+                        {type.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Category Filter */}
+              <View {...({ className: 'flex-row flex-wrap gap-2' } as any)}>
+                {categories.map((category) => {
+                  const active = selectedCategory === category.id;
+                  return (
+                    <Pressable
+                      key={category.id}
+                      onPress={() => setSelectedCategory(category.id)}
+                      {...({ className: 'px-3 py-1 rounded-full transition-all ' + (active ? 'bg-primary' : 'bg-muted') } as any)}
+                    >
+                      <Text
+                        {...({
+                          className:
+                            'text-xs font-medium ' + (active ? 'text-primary-foreground' : 'text-muted-foreground'),
+                        } as any)}
+                      >
+                        {category.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </Card>
+
+            {/* Loading / Error */}
+            {isLoading ? (
+              <View {...({ className: 'w-full items-center py-12' } as any)}>
+                <ActivityIndicator />
+                <Text {...({ className: 'mt-2 text-muted-foreground' } as any)}>Загружаем шаблоны…</Text>
+              </View>
+            ) : error ? (
+              <View {...({ className: 'w-full items-center py-12' } as any)}>
+                <Text {...({ className: 'text-red-500' } as any)}>Не удалось загрузить библиотеку</Text>
+              </View>
+            ) : null}
+
+            {/* Results */}
+            <View {...({ className: 'w-full self-stretch space-y-4' } as any)}>
+              {filteredTemplates.map((template) => (
+                <GoalTemplate key={template.id} template={template} adding={addingId === template.id} onAdd={() => handleAdd(template)} />
+              ))}
+
+              {!isLoading && filteredTemplates.length === 0 && (
+                <View {...({ className: 'w-full items-center py-8' } as any)}>
+                  <View {...({ className: 'w-16 h-16 rounded-full bg-muted items-center justify-center mb-4' } as any)}>
+                    <SearchIcon size={32} color="#9ca3af" />
+                  </View>
+                  <Text {...({ className: 'font-semibold text-foreground mb-2' } as any)}>Ничего не найдено</Text>
+                  <Text {...({ className: 'text-sm text-muted-foreground text-center' } as any)}>
+                    Попробуйте изменить фильтры или поисковый запрос
+                  </Text>
+                </View>
+              )}
+            </View>
+          </>
+        )}
       </ScrollView>
     </View>
   );

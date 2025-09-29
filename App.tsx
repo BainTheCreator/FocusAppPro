@@ -1,18 +1,20 @@
 // App.tsx
+import { setupWalletConnectCompat } from '@/lib/wc/setupCompat';
+setupWalletConnectCompat();
+
 import 'react-native-gesture-handler';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AppState, View, Pressable, Text } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
-import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query';
 
 import { Onboarding } from '@/components/Onboarding';
 import { Dashboard } from '@/components/Dashboard';
 import { CreateGoal } from '@/components/CreateGoal';
 import { Library } from '@/components/Library';
-import { Analytics } from '@/components/Analytics';
+import { Analytics } from '@/components/Analytics'; // не забудь добавить проп isAuthed внутри файла
 import { Premium } from '@/components/Premium';
 import { Teams } from '@/components/Teams';
 import { Login } from '@/components/Login';
@@ -21,12 +23,16 @@ import { Profile } from '@/components/Profile';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
 
-import { Home, TrendingUp, Crown, Users, User2 } from 'lucide-react-native';
+import { Home, TrendingUp, Crown, Users, User2, Target as TargetIcon, Sparkles, BookOpen, X as CloseIcon } from 'lucide-react-native';
 import { GoalsProvider, useGoals } from '@/state/goals';
+
 import './global.css';
-import { loginWithTelegram } from './lib/hooks/useTelegramLogin';
-import { supabase } from './lib/supabase';
+import { supabase } from '@/lib/supabase';
 import { testOpenTelegramPage } from './auth/testOpenTelegramPage';
+import { loginWithTelegram } from './lib/hooks/useTelegramLogin';
+import { loginWithGoogle } from '@/lib/hooks/useGoogleLogin';
+import { ensureUserProfile } from '@/lib/api/user';
+import { useWalletLoginWC } from '@/lib/hooks/useWalletLoginWC';
 
 type Screen =
   | 'onboarding'
@@ -39,10 +45,9 @@ type Screen =
   | 'premium'
   | 'profile';
 
-type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'email';
+type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'wallet' | 'email';
 
 const queryClient = new QueryClient();
-const ONBOARDING_KEY = '@seen_onboarding_v1';
 const FORCE_LOGIN = false;
 
 function useReactQueryFocus() {
@@ -54,10 +59,7 @@ function useReactQueryFocus() {
   }, []);
 }
 
-type BottomTabsProps = {
-  current: Screen;
-  onChange: (s: Screen) => void;
-};
+type BottomTabsProps = { current: Screen; onChange: (s: Screen) => void };
 
 function BottomTabs({ current, onChange }: BottomTabsProps) {
   const insets = useSafeAreaInsets();
@@ -69,10 +71,7 @@ function BottomTabs({ current, onChange }: BottomTabsProps) {
     { key: 'profile' as Screen, label: 'Профиль', Icon: User2 },
   ];
   return (
-    <View
-      style={{ paddingBottom: (insets?.bottom ?? 0) + 8, paddingTop: 8 }}
-      {...({ className: 'px-2 border-t border-border bg-card/90' } as any)}
-    >
+    <View style={{ paddingBottom: (insets?.bottom ?? 0) + 8, paddingTop: 8 }} {...({ className: 'px-2 border-t border-border bg-card/90' } as any)}>
       <View {...({ className: 'flex-row items-center justify-between' } as any)}>
         {tabs.map(({ key, label, Icon }) => {
           const active = current === key;
@@ -80,22 +79,10 @@ function BottomTabs({ current, onChange }: BottomTabsProps) {
             <Pressable
               key={key}
               onPress={() => onChange(key)}
-              {...({
-                className:
-                  'flex-1 items-center justify-center py-2 mx-1 rounded-xl ' +
-                  (active ? 'bg-primary/10' : ''),
-              } as any)}
+              {...({ className: 'flex-1 items-center justify-center py-2 mx-1 rounded-xl ' + (active ? 'bg-primary/10' : '') } as any)}
             >
               <Icon size={18} color={active ? '#35D07F' : '#FFFFFF'} />
-              <Text
-                {...({
-                  className:
-                    'mt-1 text-xs ' +
-                    (active ? 'text-primary font-medium' : 'text-foreground'),
-                } as any)}
-              >
-                {label}
-              </Text>
+              <Text {...({ className: 'mt-1 text-xs ' + (active ? 'text-primary font-medium' : 'text-foreground') } as any)}>{label}</Text>
             </Pressable>
           );
         })}
@@ -104,190 +91,183 @@ function BottomTabs({ current, onChange }: BottomTabsProps) {
   );
 }
 
-function AppShell() {
-  const [currentScreen, setCurrentScreen] = useState<Screen>('onboarding');
-  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
-  const [isAuthed, setIsAuthed] = useState(false);
-  const [booted, setBooted] = useState(false);
-  const { addGoal, addFromTemplate } = useGoals();
+function PostSignupTutorialOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <View pointerEvents="auto" {...({ className: 'absolute inset-0 bg-black/60 items-center justify-center px-6' } as any)}>
+      <View {...({ className: 'w-full max-w-md rounded-2xl bg-card border border-border p-5' } as any)}>
+        <View {...({ className: 'flex-row items-center justify-between mb-2' } as any)}>
+          <Text {...({ className: 'text-lg font-semibold text-foreground' } as any)}>Добро пожаловать! 🚀</Text>
+          <Pressable onPress={onClose} {...({ className: 'p-1 -mr-1' } as any)}><CloseIcon size={18} color="#9ca3af" /></Pressable>
+        </View>
+        <Text {...({ className: 'text-sm text-muted-foreground mb-3' } as any)}>Коротко о главном. Вот с чего лучше начать:</Text>
+        <View {...({ className: 'gap-3' } as any)}>
+          <View {...({ className: 'flex-row items-start gap-3' } as any)}>
+            <TargetIcon size={18} color="#35D07F" />
+            <View {...({ className: 'flex-1' } as any)}>
+              <Text {...({ className: 'text-foreground font-medium' } as any)}>Создайте первую цель</Text>
+              <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>Нажмите “Создать” на главном экране и добавьте шаги — вручную или с помощью AI.</Text>
+            </View>
+          </View>
+          <View {...({ className: 'flex-row items-start gap-3' } as any)}>
+            <BookOpen size={18} color="#35D07F" />
+            <View {...({ className: 'flex-1' } as any)}>
+              <Text {...({ className: 'text-foreground font-medium' } as any)}>Загляните в библиотеку</Text>
+              <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>Готовые шаблоны целей — добавьте одну в один клик и начните.</Text>
+            </View>
+          </View>
+          <View {...({ className: 'flex-row items-start gap-3' } as any)}>
+            <Sparkles size={18} color="#35D07F" />
+            <View {...({ className: 'flex-1' } as any)}>
+              <Text {...({ className: 'text-foreground font-medium' } as any)}>Включите AI‑инсайты</Text>
+              <Text {...({ className: 'text-sm text-muted-foreground' } as any)}>На экране “Статистика” получите персональные советы для ускорения прогресса.</Text>
+            </View>
+          </View>
+        </View>
+        <Pressable onPress={onClose} {...({ className: 'mt-5 h-11 rounded-xl bg-primary items-center justify-center active:opacity-90' } as any)}>
+          <Text {...({ className: 'text-primary-foreground font-semibold' } as any)}>Погнали!</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
 
-  // Старт: читаем онбординг и текущую сессию
+function AppShell() {
+  const qc = useQueryClient();
+
+  const [booted, setBooted] = useState(false);
+  const [isAuthed, setIsAuthed] = useState(false);
+  const [currentScreen, setCurrentScreen] = useState<Screen>('onboarding');
+  const [onboardingDone, setOnboardingDone] = useState(false);
+  const [showSignupTutorial, setShowSignupTutorial] = useState(false);
+
+  const { addGoal } = useGoals?.() || { addGoal: async () => {} };
+  const { signIn: signInWallet } = useWalletLoginWC();
+
   useEffect(() => {
     (async () => {
       try {
-        const [onb, sess] = await Promise.all([
-          AsyncStorage.getItem(ONBOARDING_KEY),
-          supabase.auth.getSession(),
-        ]);
-        const seen = onb === '1';
+        const sess = await supabase.auth.getSession();
         const authed = !!sess.data.session;
-
-        setHasSeenOnboarding(seen);
         setIsAuthed(authed);
 
         let initial: Screen;
         if (FORCE_LOGIN) initial = 'login';
-        else if (!seen) initial = 'onboarding';
+        else if (!authed && !onboardingDone) initial = 'onboarding';
         else if (!authed) initial = 'login';
         else initial = 'dashboard';
-
         setCurrentScreen(initial);
       } catch {
-        setHasSeenOnboarding(false);
         setIsAuthed(false);
-        setCurrentScreen(FORCE_LOGIN ? 'login' : 'onboarding');
+        setCurrentScreen('onboarding');
       } finally {
         setBooted(true);
       }
     })();
 
-    // Подписка на изменения авторизации
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
       setIsAuthed(!!session);
+
       if (event === 'SIGNED_IN') {
+        const res: any = await ensureUserProfile().catch(() => ({ created: false }));
+        // перезапускаем данные
+        qc.invalidateQueries({ queryKey: ['goals'] });
+        qc.invalidateQueries({ queryKey: ['goal_templates'] });
+        qc.invalidateQueries({ queryKey: ['teams'] });
+        qc.invalidateQueries({ queryKey: ['me'] });
+
         setCurrentScreen('dashboard');
+        if (res?.created) setShowSignupTutorial(true);
       }
       if (event === 'SIGNED_OUT') {
-        setCurrentScreen('login');
+        setOnboardingDone(false);
+        setCurrentScreen('onboarding');
       }
     });
     return () => sub.subscription.unsubscribe();
-  }, []);
+  }, [onboardingDone, qc]);
 
-  // Если не авторизован — держим только onboarding/login
-  useEffect(() => {
-    if (!booted) return;
-    if (!isAuthed && currentScreen !== 'onboarding' && currentScreen !== 'login') {
-      setCurrentScreen('login');
-    }
-  }, [booted, isAuthed, currentScreen]);
+  // “надёжный” экран
+  const effectiveScreen: Screen = useMemo(() => {
+    if (!booted) return 'onboarding';
+    if (!isAuthed) return onboardingDone ? 'login' : 'onboarding';
+    const allowed: Screen[] = ['dashboard', 'create-goal', 'library', 'analytics', 'teams', 'premium', 'profile'];
+    return allowed.includes(currentScreen) ? currentScreen : 'dashboard';
+  }, [booted, isAuthed, onboardingDone, currentScreen]);
 
-  // Если авторизовались, а экран всё ещё login — переходим на дашборд
-  useEffect(() => {
-    if (!booted) return;
-    if (isAuthed && currentScreen === 'login') {
-      setCurrentScreen('dashboard');
-    }
-  }, [booted, isAuthed, currentScreen]);
-
-  const showTabs =
-    !(currentScreen === 'onboarding' && !hasSeenOnboarding) &&
-    currentScreen !== 'create-goal' &&
-    currentScreen !== 'login';
-
+  const showTabs = !['onboarding', 'login', 'create-goal'].includes(effectiveScreen);
   const extraBottomPadding = showTabs ? 100 : 0;
 
-  const handleOnboardingComplete = async () => {
-    setHasSeenOnboarding(true);
-    try {
-      await AsyncStorage.setItem(ONBOARDING_KEY, '1');
-    } catch {}
-    setCurrentScreen(isAuthed ? 'dashboard' : 'login');
+  const handleOnboardingComplete = () => {
+    setOnboardingDone(true);
+    setCurrentScreen('login');
   };
-
   const handleCreateGoal = () => setCurrentScreen('create-goal');
-
-  const handleGoalSaved = (draft: any) => {
-    addGoal(draft);
-    setCurrentScreen('dashboard');
-  };
-
+  const handleGoalSaved = (draft: any) => { addGoal?.(draft); setCurrentScreen('dashboard'); };
   const handleBack = () => setCurrentScreen('dashboard');
+  const loginOnSkip = () => setCurrentScreen('onboarding');
 
-  // Логин с провайдерами
   const handleLoginWith = async (provider: Provider) => {
-    if (provider === 'qr') {
-      try {
-        await testOpenTelegramPage();
-      } catch (e) {
-        console.warn('Test open error', e);
-      }
-      return;
-    }
-    if (provider === 'telegram') {
-      try {
-        // Флоу через бота: после успешного обмена supabase.auth.setSession вызовет SIGNED_IN
-        await loginWithTelegram();
-        // Не переключаем экран вручную — навигацию делает onAuthStateChange(SIGNED_IN)
-      } catch (e) {
-        console.warn('Ошибка входа через Telegram', e);
-      }
-      return;
-    }
+    if (provider === 'qr') { try { await testOpenTelegramPage(); } catch (e) { console.warn(e); } return; }
+    if (provider === 'telegram') { try { await loginWithTelegram(); } catch (e) { console.warn(e); } return; }
+    if (provider === 'google')   { try { await loginWithGoogle({ debug: true }); } catch (e) { console.warn(e); } return; }
+    if (provider === 'wallet')   { try { await signInWallet(); } catch (e) { console.warn(e); } return; }
   };
 
   const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch {}
+    try { await supabase.auth.signOut(); } catch {}
     setIsAuthed(false);
-    setCurrentScreen('login');
+    setOnboardingDone(false);
+    setCurrentScreen('onboarding');
   };
 
-  // Сплэш
   if (!booted) {
     return (
       <SafeAreaView style={{ flex: 1 }} dataSet={{ theme: 'dark' }} {...({ className: 'bg-background items-center justify-center' } as any)}>
         <StatusBar style="light" translucent backgroundColor="transparent" />
-        <Text {...({ className: 'text-foreground' } as any)}>Загрузка...</Text>
+        <Text {...({ className: 'text-foreground' } as any)}>Загрузка…</Text>
       </SafeAreaView>
     );
   }
 
-  const loginOnSkip = hasSeenOnboarding ? undefined : () => setCurrentScreen('onboarding');
-
   return (
-    <SafeAreaView
-      style={{ flex: 1 }}
-      dataSet={{ theme: 'dark' }}
-      {...({ className: 'bg-background' } as any)}
-    >
+    <SafeAreaView style={{ flex: 1 }} dataSet={{ theme: 'dark' }} {...({ className: 'bg-background' } as any)}>
       <StatusBar style="light" translucent backgroundColor="transparent" />
       <View {...({ className: 'flex-1 bg-background' } as any)}>
-        {currentScreen === 'onboarding' && !hasSeenOnboarding ? (
+        {effectiveScreen === 'onboarding' ? (
           <Onboarding onComplete={handleOnboardingComplete} />
-        ) : currentScreen === 'login' ? (
+        ) : effectiveScreen === 'login' ? (
           <Login onLoginWith={handleLoginWith} onSkip={loginOnSkip} />
-        ) : currentScreen === 'dashboard' ? (
+        ) : effectiveScreen === 'dashboard' ? (
           <Dashboard
+            isAuthed={isAuthed}
             onCreateGoal={handleCreateGoal}
             onLibrary={() => setCurrentScreen('library')}
             onAnalytics={() => setCurrentScreen('analytics')}
             extraBottomPadding={extraBottomPadding}
           />
-        ) : currentScreen === 'create-goal' ? (
+        ) : effectiveScreen === 'create-goal' ? (
           <CreateGoal onBack={handleBack} onSave={handleGoalSaved} />
-        ) : currentScreen === 'library' ? (
+        ) : effectiveScreen === 'library' ? (
           <Library
+            isAuthed={isAuthed}
             onBack={handleBack}
-            onAddGoal={(t) => {
-              addFromTemplate(t);
-              setCurrentScreen('dashboard');
-            }}
+            onAdded={() => setCurrentScreen('dashboard')}
             extraBottomPadding={extraBottomPadding !== 0 ? extraBottomPadding + 80 : 0}
           />
-        ) : currentScreen === 'analytics' ? (
-          <Analytics onBack={handleBack} extraBottomPadding={extraBottomPadding} />
-        ) : currentScreen === 'teams' ? (
-          <Teams onBack={handleBack} extraBottomPadding={extraBottomPadding} />
-        ) : currentScreen === 'premium' ? (
-          <Premium
-            onSubscribe={(planId) => {
-              console.log('Подписка на план:', planId);
-            }}
-            extraBottomPadding={extraBottomPadding !== 0 ? extraBottomPadding - 100 : 0}
-          />
-        ) : currentScreen === 'profile' ? (
-          <Profile onLogout={handleLogout} extraBottomPadding={extraBottomPadding} />
+        ) : effectiveScreen === 'analytics' ? (
+          <Analytics isAuthed={isAuthed} onBack={handleBack} extraBottomPadding={extraBottomPadding} />
+        ) : effectiveScreen === 'teams' ? (
+          <Teams isAuthed={isAuthed} onBack={handleBack} extraBottomPadding={extraBottomPadding} />
+        ) : effectiveScreen === 'premium' ? (
+          <Premium onSubscribe={(planId) => { console.log('Подписка на план:', planId); }} extraBottomPadding={extraBottomPadding !== 0 ? extraBottomPadding - 100 : 0} />
+        ) : effectiveScreen === 'profile' ? (
+          <Profile isAuthed={isAuthed} onLogout={handleLogout} extraBottomPadding={extraBottomPadding} />
         ) : null}
+
+        {showSignupTutorial && <PostSignupTutorialOverlay onClose={() => setShowSignupTutorial(false)} />}
       </View>
 
-      {showTabs && (
-        <BottomTabs
-          current={currentScreen}
-          onChange={(s) => setCurrentScreen(s)}
-        />
-      )}
+      {showTabs && <BottomTabs current={effectiveScreen} onChange={(s) => setCurrentScreen(s)} />}
 
       <Toaster />
     </SafeAreaView>

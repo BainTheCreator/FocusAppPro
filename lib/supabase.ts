@@ -7,12 +7,14 @@ export const SUPABASE_URL =
 const SUPABASE_ANON_KEY =
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? 'sb_publishable_08-vBXg4aJ-ck7pBR_jZ5w_aDcAHwCx';
 
+const isWeb = typeof window !== 'undefined';
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    storage: AsyncStorage,
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: false,
+    detectSessionInUrl: isWeb,                 // ВКЛЮЧЕНО на web
+    storage: AsyncStorage, // web — localStorage по умолчанию
   },
 });
 

@@ -1,6 +1,6 @@
-// Analytics.tsx — данные из БД (React Query + Realtime), история с датами: создана / активность / завершена
+// Analytics.tsx — данные из БД (React Query + Realtime) + AI Инсайты + история
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView, Pressable } from 'react-native';
+import { View, Text, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import {
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react-native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchGoals, type UiGoal } from '@/lib/api/goals';
+import { aiInsights } from '@/lib/api/ai';
 import { supabase } from '@/lib/supabase';
 
 type Trend = 'up' | 'down' | 'neutral';
@@ -103,21 +104,24 @@ const HistoryItem = ({ g }: { g: UiGoal }) => (
 interface AnalyticsProps {
   onBack: () => void;
   extraBottomPadding?: number;
+  isAuthed: boolean; // ← важный флаг
 }
 
-export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) => {
+export const Analytics = ({ onBack, extraBottomPadding = 0, isAuthed }: AnalyticsProps) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
   const qc = useQueryClient();
 
-  // Список целей из БД
+  // Список целей из БД (только после авторизации)
   const { data: goals = [], isFetching, refetch } = useQuery({
     queryKey: ['goals'],
     queryFn: fetchGoals,
     staleTime: 10_000,
+    enabled: !!isAuthed,
   });
 
-  // Realtime: инвалидируем, если что-то поменялось
+  // Realtime: инвалидируем, если что-то поменялось (только когда авторизованы)
   useEffect(() => {
+    if (!isAuthed) return;
     const ch1 = supabase
       .channel('rt:user_targets')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'user_targets' }, () => {
@@ -134,7 +138,7 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
       supabase.removeChannel(ch1);
       supabase.removeChannel(ch2);
     };
-  }, [qc]);
+  }, [qc, isAuthed]);
 
   // Быстрые метрики
   const totalGoals = goals.length;
@@ -148,6 +152,50 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
     return [...goals].sort((a, b) => sortKey(b) - sortKey(a)).slice(0, 10);
   }, [goals]);
 
+  // ---------- AI Инсайты ----------
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiText, setAiText] = useState<string>('');
+
+  const summarizeGoals = (arr: UiGoal[]) => {
+    const total = arr.length;
+    const completed = arr.filter((g) => g.status === 'completed').length;
+    const active = arr.filter((g) => g.status === 'active').length;
+    const paused = arr.filter((g) => g.status === 'paused').length;
+
+    const topProgress = [...arr]
+      .sort((a, b) => b.progress - a.progress)
+      .slice(0, 5)
+      .map((g) => `- ${g.title} [${g.status}] • прогресс ${g.progress}% • шагов ${g.subtasksCount}`)
+      .join('\n');
+
+    const slow = [...arr]
+      .filter((g) => g.status !== 'completed')
+      .sort((a, b) => a.progress - b.progress)
+      .slice(0, 5)
+      .map((g) => `- ${g.title} • прогресс ${g.progress}%`)
+      .join('\n');
+
+    return `Цели: всего ${total}, активных ${active}, на паузе ${paused}, завершено ${completed}.
+Топ по прогрессу:
+${topProgress || '- нет'}
+Требуют внимания:
+${slow || '- нет'}`;
+  };
+
+  const fetchAi = async () => {
+    if (!isAuthed) return;
+    try {
+      setAiLoading(true);
+      const summary = summarizeGoals(goals);
+      const text = await aiInsights(summary);
+      setAiText(text);
+    } catch (e) {
+      setAiText('Не удалось получить инсайты. Попробуйте ещё раз.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const TABS_HEIGHT = 60;
 
   return (
@@ -158,7 +206,11 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
           <Button variant="ghost" size="sm" onPress={onBack} {...({ className: 'text-white hover:bg-white/10' } as any)}>
             <ArrowLeft size={16} color="white" />
           </Button>
-          <Pressable onPress={() => refetch()} {...({ className: 'flex-row items-center gap-2 px-3 py-2 rounded-lg bg-white/10 active:opacity-80' } as any)}>
+          <Pressable
+            onPress={() => isAuthed && refetch()}
+            disabled={!isAuthed}
+            {...({ className: 'flex-row items-center gap-2 px-3 py-2 rounded-lg bg-white/10 active:opacity-80' } as any)}
+          >
             <RefreshCw size={14} color="#fff" />
             <Text {...({ className: 'text-white text-xs' } as any)}>{isFetching ? 'Обновляем...' : 'Обновить'}</Text>
           </Pressable>
@@ -167,7 +219,7 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
         {activeTab === 'overview' && (
           <View {...({ className: 'items-center' } as any)}>
             <Text {...({ className: 'text-2xl font-bold text-white mb-1' } as any)}>Ваш прогресс</Text>
-            <Text {...({ className: 'text-white/80' } as any)}>По вашим целям</Text>
+            <Text {...({ className: 'text-white/80' } as any)}>{isAuthed ? 'По вашим целям' : 'Войдите, чтобы увидеть статистику'}</Text>
           </View>
         )}
       </View>
@@ -178,7 +230,17 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
         {...({ className: 'px-4 -mt-2' } as any)}
         showsVerticalScrollIndicator={false}
       >
-        {activeTab === 'overview' ? (
+        {!isAuthed ? (
+          <View {...({ className: 'w-full items-center py-16' } as any)}>
+            <View {...({ className: 'w-16 h-16 rounded-full bg-muted items-center justify-center mb-4' } as any)}>
+              <Brain size={32} color="#9ca3af" />
+            </View>
+            <Text {...({ className: 'font-semibold text-foreground mb-2' } as any)}>Требуется вход</Text>
+            <Text {...({ className: 'text-sm text-muted-foreground text-center' } as any)}>
+              Авторизуйтесь, чтобы видеть аналитику по вашим целям и AI‑инсайты.
+            </Text>
+          </View>
+        ) : activeTab === 'overview' ? (
           <>
             {/* Quick Stats */}
             <View {...({ className: 'bg-card rounded-2xl p-4 shadow-medium mb-6' } as any)}>
@@ -200,20 +262,40 @@ export const Analytics = ({ onBack, extraBottomPadding = 0 }: AnalyticsProps) =>
 
             {/* AI Insights */}
             <Card {...({ className: 'p-4 bg-gradient-primary text-white shadow-medium border-0 mb-6' } as any)}>
-              <View {...({ className: 'flex-row items-center mb-4' } as any)}>
-                <Brain size={20} color="white" />
-                <Text {...({ className: 'font-semibold text-white ml-2' } as any)}>AI Инсайты</Text>
+              <View {...({ className: 'flex-row items-center justify-between mb-3' } as any)}>
+                <View {...({ className: 'flex-row items-center' } as any)}>
+                  <Brain size={20} color="white" />
+                  <Text {...({ className: 'font-semibold text-white ml-2' } as any)}>AI Инсайты</Text>
+                </View>
+                <View {...({ className: 'flex-row gap-2' } as any)}>
+                  <Pressable
+                    onPress={fetchAi}
+                    disabled={aiLoading || !isAuthed}
+                    {...({ className: 'px-3 py-1.5 rounded-lg bg-white/15 active:opacity-80' } as any)}
+                  >
+                    <Text {...({ className: 'text-white text-xs' } as any)}>{aiLoading ? '...' : 'Сгенерировать'}</Text>
+                  </Pressable>
+                </View>
               </View>
-              <View {...({ className: 'space-y-2' } as any)}>
-                <Text {...({ className: 'text-sm text-white' } as any)}>🎯 Завершайте цели с высоким прогрессом — это быстрые победы.</Text>
-                <Text {...({ className: 'text-sm text-white' } as any)}>⚡ Маленькие шаги каждый день повышают успешность.</Text>
+
+              <View {...({ className: 'rounded-xl bg-white/10 p-3 min-h-[120px]' } as any)}>
+                {aiLoading ? (
+                  <View {...({ className: 'flex-row items-center' } as any)}>
+                    <ActivityIndicator color="#fff" />
+                    <Text {...({ className: 'ml-2 text-white/80' } as any)}>AI думает…</Text>
+                  </View>
+                ) : (
+                  <Text {...({ className: 'text-white' } as any)}>
+                    {aiText || 'Нажмите “Сгенерировать”, чтобы получить персональные инсайты.'}
+                  </Text>
+                )}
               </View>
             </Card>
           </>
         ) : (
           <>
             {/* History */}
-            <View {...({ className: 'space-y-3' } as any)}>
+            <View {...({ className: 'space-y-3 flex flex-col gap-3' } as any)}>
               {recentGoals.map((g) => (
                 <HistoryItem key={g.id} g={g} />
               ))}
