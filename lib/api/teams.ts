@@ -18,7 +18,7 @@ export type TeamListItem = {
 
 export async function createTeam(input: { name: string; emoji?: string; description?: string }) {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
+  // if (!token) throw new Error('Not authenticated');
   const res = await fetch(`${FUNCTIONS_BASE}/teams-create`, {
     method: 'POST',
     headers: { 'content-type':'application/json', authorization:`Bearer ${token}` },
@@ -31,7 +31,7 @@ export async function createTeam(input: { name: string; emoji?: string; descript
 
 export async function fetchTeams(): Promise<TeamListItem[]> {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
+  // if (!token) throw new Error('Not authenticated');
   const res = await fetch(`${FUNCTIONS_BASE}/teams-list`, {
     method: 'POST',
     headers: { 'content-type':'application/json', authorization:`Bearer ${token}` },
@@ -45,7 +45,7 @@ export async function fetchTeams(): Promise<TeamListItem[]> {
 
 export async function createInvite(team_id: number, opts?: { ttl_minutes?: number; max_uses?: number|null }) {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
+  // if (!token) throw new Error('Not authenticated');
   const res = await fetch(`${FUNCTIONS_BASE}/teams-invite-create`, {
     method: 'POST',
     headers: { 'content-type':'application/json', authorization:`Bearer ${token}` },
@@ -58,7 +58,7 @@ export async function createInvite(team_id: number, opts?: { ttl_minutes?: numbe
 
 export async function joinTeam(code: string) {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
+  // if (!token) throw new Error('Not authenticated');
   const res = await fetch(`${FUNCTIONS_BASE}/teams-join`, {
     method: 'POST',
     headers: { 'content-type':'application/json', authorization:`Bearer ${token}` },
@@ -71,7 +71,7 @@ export async function joinTeam(code: string) {
 
 export async function setTeamStatus(team_id: number, status: 'active'|'paused'|'archived') {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
+  //if (!token) throw new Error('Not authenticated');
   const res = await fetch(`${FUNCTIONS_BASE}/team-set-status`, {
     method: 'POST',
     headers: { 'content-type':'application/json', authorization:`Bearer ${token}` },
@@ -84,7 +84,7 @@ export async function setTeamStatus(team_id: number, status: 'active'|'paused'|'
 
 export async function leaveTeam(team_id: number) {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!token) throw new Error('Not authenticated');
+  //if (!token) throw new Error('Not authenticated');
   const res = await fetch(`${FUNCTIONS_BASE}/team-leave`, {
     method: 'POST',
     headers: { 'content-type':'application/json', authorization:`Bearer ${token}` },

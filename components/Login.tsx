@@ -1,8 +1,10 @@
+// Login.tsx
 import React from 'react';
 import { View, Text, Pressable } from 'react-native';
 import { Send, Shield, ChevronLeft } from 'lucide-react-native';
 
-type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'wallet';
+// было: 'wallet'
+type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'web3';
 
 type LoginProps = {
   onLoginWith?: (provider: Provider) => void;
@@ -47,11 +49,12 @@ export function Login({ onLoginWith, onSkip }: LoginProps) {
           <Text {...({ className: 'text-black text-base font-semibold' } as any)}>Продолжить с Google</Text>
         </Pressable>
 
+        {/* было: onPress={() => onLoginWith?.('wallet')} */}
         <Pressable
-          onPress={() => onLoginWith?.('wallet')}
+          onPress={() => onLoginWith?.('web3')}
           {...({ className: 'mt-3 w-full rounded-xl border border-primary bg-primary py-3 items-center justify-center active:opacity-90' } as any)}
         >
-          <Text {...({ className: 'text-foreground text-base font-semibold' } as any)}>Войти через крипто-кошелёк</Text>
+          <Text {...({ className: 'text-foreground text-base font-semibold' } as any)}>Войти через Web3 Wallet</Text>
         </Pressable>
 
         <View {...({ className: 'mt-6 w-full px-4 py-3 rounded-xl bg-card border border-border' } as any)}>
@@ -62,17 +65,7 @@ export function Login({ onLoginWith, onSkip }: LoginProps) {
             </Text>
           </View>
         </View>
-
-        {/* <Pressable onPress={onSkip} {...({ className: 'mt-6' } as any)}>
-          <Text {...({ className: 'text-muted-foreground underline' } as any)}>Продолжить без входа</Text>
-        </Pressable> */}
       </View>
-
-      {/* <View {...({ className: 'pb-6' } as any)}>
-        <Text {...({ className: 'text-center text-xs text-muted-foreground' } as any)}>
-          Нажимая «Продолжить», вы соглашаетесь с Условиями и Политикой конфиденциальности
-        </Text>
-      </View> */}
     </View>
   );
 }

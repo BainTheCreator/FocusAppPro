@@ -45,7 +45,7 @@ type Screen =
   | 'premium'
   | 'profile';
 
-type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'wallet' | 'email';
+type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'web3' | 'email';
 
 const queryClient = new QueryClient();
 const FORCE_LOGIN = false;
@@ -156,6 +156,17 @@ function AppShell() {
         else if (!authed) initial = 'login';
         else initial = 'dashboard';
         setCurrentScreen(initial);
+
+        // ВАЖНО: если пользователь уже залогинен (возврат в приложение),
+        // создадим/обновим профиль сразу.
+        if (authed) {
+          try {
+            const res = await ensureUserProfile();
+            if (res.created) setShowSignupTutorial(true);
+          } catch (e) {
+            console.warn('ensureUserProfile on boot failed', e);
+          }
+        }
       } catch {
         setIsAuthed(false);
         setCurrentScreen('onboarding');
@@ -168,7 +179,15 @@ function AppShell() {
       setIsAuthed(!!session);
 
       if (event === 'SIGNED_IN') {
-        const res: any = await ensureUserProfile().catch(() => ({ created: false }));
+        // Создаём/обновляем профиль сразу после входа
+        let created = false;
+        try {
+          const res = await ensureUserProfile();
+          created = !!res.created;
+        } catch (e) {
+          console.warn('ensureUserProfile on SIGNED_IN failed', e);
+        }
+
         // перезапускаем данные
         qc.invalidateQueries({ queryKey: ['goals'] });
         qc.invalidateQueries({ queryKey: ['goal_templates'] });
@@ -176,7 +195,7 @@ function AppShell() {
         qc.invalidateQueries({ queryKey: ['me'] });
 
         setCurrentScreen('dashboard');
-        if (res?.created) setShowSignupTutorial(true);
+        if (created) setShowSignupTutorial(true);
       }
       if (event === 'SIGNED_OUT') {
         setOnboardingDone(false);
@@ -207,10 +226,10 @@ function AppShell() {
   const loginOnSkip = () => setCurrentScreen('onboarding');
 
   const handleLoginWith = async (provider: Provider) => {
-    if (provider === 'qr') { try { await testOpenTelegramPage(); } catch (e) { console.warn(e); } return; }
+    if (provider === 'qr')       { try { await testOpenTelegramPage(); } catch (e) { console.warn(e); } return; }
     if (provider === 'telegram') { try { await loginWithTelegram(); } catch (e) { console.warn(e); } return; }
     if (provider === 'google')   { try { await loginWithGoogle({ debug: true }); } catch (e) { console.warn(e); } return; }
-    if (provider === 'wallet')   { try { await signInWallet(); } catch (e) { console.warn(e); } return; }
+    if (provider === 'web3')     { try { await signInWallet(); } catch (e) { console.warn(e); } return; }
   };
 
   const handleLogout = async () => {

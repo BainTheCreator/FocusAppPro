@@ -1,238 +1,119 @@
-// lib/hooks/useWalletLoginWC.tsx
-
-import React, { useCallback } from 'react';
-import { Linking, Platform, Alert } from 'react-native';
+// lib/hooks/useWalletLoginWC.ts
+import { useCallback, useState } from 'react';
+import { Linking } from 'react-native';
 import SignClient from '@walletconnect/sign-client';
-import type { SessionTypes } from '@walletconnect/types';
-import { getWalletNonce, verifyWalletAndLogin } from '@/lib/api/walletAuth';
+import { Buffer } from 'buffer';
+import { supabase } from '@/lib/supabase';
+import { siweGetNonce, siweVerify } from '@/lib/api/authWeb3';
 
-const WC_PROJECT_ID =
-  process.env.EXPO_PUBLIC_WC_PROJECT_ID ||
-  'b4f1e28bcc6f48280272eeb1a1e7e18b'; // <-- подставь свой или прокини через .env / app.json extra
-
-let client: SignClient | null = null;
-
-async function waitRelayerConnected(sc: any, timeoutMs = 7000) {
-  // ждём, пока WS к релею реально откроется, иначе бывают publish/tag undefined
-  if (sc?.core?.relayer?.connected) return;
-  await new Promise<void>((resolve, reject) => {
-    const done = () => {
-      try {
-        sc.core.relayer.events.off('connect', done);
-        sc.core.relayer.events.off('error', onErr);
-      } catch {}
-      resolve();
-    };
-    const onErr = (e: any) => {
-      try {
-        sc.core.relayer.events.off('connect', done);
-        sc.core.relayer.events.off('error', onErr);
-      } catch {}
-      reject(new Error('Relay error: ' + (e?.message || e)));
-    };
-    try {
-      sc.core.relayer.events.on('connect', done);
-      sc.core.relayer.events.on('error', onErr);
-    } catch {
-      resolve(); // в старых версиях events может не быть — идём дальше
-    }
-    setTimeout(done, timeoutMs);
-  });
+let clientPromise: Promise<SignClient> | null = null;
+async function getClient() {
+  if (!clientPromise) {
+    const projectId = process.env.EXPO_PUBLIC_WC_PROJECT_ID;
+    if (!projectId) throw new Error('EXPO_PUBLIC_WC_PROJECT_ID is missing');
+    clientPromise = SignClient.init({
+      projectId,
+      relayUrl: 'wss://relay.walletconnect.com',
+      metadata: {
+        name: 'FocusAppPro',
+        description: 'Login via Web3',
+        url: 'https://focus.app',
+        icons: ['https://avatars.githubusercontent.com/u/37784886'],
+      },
+    });
+  }
+  return clientPromise;
 }
 
-async function ensureClient() {
-  if (!WC_PROJECT_ID) throw new Error('WalletConnect Project ID пуст');
-  if (client) return client;
-  console.log('[WC] init, projectId =', WC_PROJECT_ID);
-  client = await SignClient.init({
-    projectId: WC_PROJECT_ID,
-    relayUrl: 'wss://relay.walletconnect.com',
-    metadata: {
-      name: 'FocusAppPro',
-      description: 'Login with wallet',
-      url: 'https://focusapp.pro',
-      icons: ['https://avatars.githubusercontent.com/u/37784886?s=200&v=4'],
-    },
-  });
-  await waitRelayerConnected(client);
-  return client;
-}
-
-async function openWalletDeepLink(uri: string) {
+async function openWallet(uri: string) {
   const e = encodeURIComponent(uri);
-  const native = [
+  const tries = [
     `metamask://wc?uri=${e}`,
-    `trust://wc?uri=${e}`,
     `rainbow://wc?uri=${e}`,
-    `zerion://wc?uri=${e}`,
-    `argent://wc?uri=${e}`,
-    `okx://wc?uri=${e}`,
-    `imtokenv2://wc?uri=${e}`,
-    `walletconnect://wc?uri=${e}`,
+    `trust://wc?uri=${e}`,
+    `crypto.com://wc?uri=${e}`,
     `wc:${uri}`,
+    `https://link.walletconnect.com/?uri=${e}`,
   ];
-  for (const url of native) {
+  for (const url of tries) {
     try {
-      const can = await Linking.canOpenURL(url);
-      if (can) {
-        await Linking.openURL(url);
-        return true;
-      }
+      const ok = await Linking.canOpenURL(url);
+      if (ok) { await Linking.openURL(url); return; }
     } catch {}
   }
-  const universal = [
-    `https://metamask.app.link/wc?uri=${e}`,
-    `https://link.trustwallet.com/wc?uri=${e}`,
-    `https://rnbwapp.com/wc?uri=${e}`,
-    `https://app.zerion.io/wc?uri=${e}`,
-    `https://www.okx.com/wallet/wc?uri=${e}`,
-  ];
-  for (const url of universal) {
-    try {
-      await Linking.openURL(url);
-      return true;
-    } catch {}
-  }
-  return false;
+  throw new Error('Не найден установленный кошелёк (MetaMask/Rainbow/Trust).');
 }
 
-// безопасно получить pairings при разных версиях SDK
-function getAllPairings(sc: any) {
-  return (
-    sc?.pairing?.getAll?.() ||
-    sc?.core?.pairing?.pairings?.getAll?.() ||
-    []
-  );
-}
-
-function getAddressAndChain(session: SessionTypes.Struct) {
-  const ns = session.namespaces?.eip155;
-  const acc = ns?.accounts?.[0]; // 'eip155:1:0x...'
-  if (!acc) throw new Error('Не получили аккаунт из сессии');
-  const [, chain, address] = acc.split(':');
-  return { address: address.toLowerCase(), chainId: Number(chain) || 1 };
-}
-
-async function signWithSession(sc: any, session: SessionTypes.Struct) {
-  const { address, chainId } = getAddressAndChain(session);
-
-  const nonce = await getWalletNonce();
-  const domain = 'focusapp.pro';
-  const appUri = Platform.select({
-    web: typeof window !== 'undefined' ? window.location.origin : 'https://focusapp.pro',
-    default: 'goalsapp://auth/callback',
-  }) as string;
-
-  const msg = `${domain} wants you to sign in with your Ethereum account:
-${address}
-
-Sign in to FocusAppPro
-
-URI: ${appUri}
-Version: 1
-Chain ID: ${chainId}
-Nonce: ${nonce}
-Issued At: ${new Date().toISOString()}`;
-
-  // иногда релэй ещё не успел — повторим после ожидания
-  try {
-    await waitRelayerConnected(sc, 5000);
-    const sig: string = await sc.request({
-      topic: session.topic,
-      chainId: `eip155:${chainId}`,
-      request: { method: 'personal_sign', params: [msg, address] },
-    });
-    await verifyWalletAndLogin({ address, message: msg, signature: sig });
-    console.log('[WC] login done');
-  } catch (e: any) {
-    console.warn('[WC] sign error', e?.message || e);
-    await waitRelayerConnected(sc, 5000);
-    const sig: string = await sc.request({
-      topic: session.topic,
-      chainId: `eip155:${chainId}`,
-      request: { method: 'personal_sign', params: [msg, address] },
-    });
-    await verifyWalletAndLogin({ address, message: msg, signature: sig });
-  }
+function buildSiweMessage(params: {
+  domain: string; address: string; uri: string; chainId: number; nonce: string; statement?: string;
+}) {
+  const { domain, address, statement = 'Sign in to FocusAppPro', uri, chainId, nonce } = params;
+  const now = new Date().toISOString();
+  return [
+    `${domain} wants you to sign in with your Ethereum account:`,
+    `${address}`,
+    ``,
+    `${statement}`,
+    ``,
+    `URI: ${uri}`,
+    `Version: 1`,
+    `Chain ID: ${chainId}`,
+    `Nonce: ${nonce}`,
+    `Issued At: ${now}`,
+  ].join('\n');
 }
 
 export function useWalletLoginWC() {
+  const [loading, setLoading] = useState(false);
+
   const signIn = useCallback(async () => {
-    const sc = await ensureClient();
+    setLoading(true);
+    try {
+      const client = await getClient();
 
-    // 0) reuse active session
-    const sessions = sc.session.getAll().filter((s: any) => s.namespaces?.eip155?.accounts?.length);
-    if (sessions.length) {
-      console.log('[WC] reuse existing session');
-      await signWithSession(sc, sessions[0]);
-      return;
-    }
-
-    // 1) если есть активный pairing — переиспользуем
-    const pairings = getAllPairings(sc).filter((p: any) => p.active);
-    if (pairings.length > 0) {
-      console.log('[WC] connect with existing pairing');
-      const { approval } = await sc.connect({
-        pairingTopic: pairings[0].topic,
-        optionalNamespaces: {
+      // 1) connect
+      const { uri, approval } = await client.connect({
+        requiredNamespaces: {
           eip155: {
-            methods: ['personal_sign', 'eth_signTypedData', 'eth_sendTransaction'],
+            methods: ['personal_sign', 'eth_sign'],
             chains: ['eip155:1'],
             events: ['accountsChanged', 'chainChanged'],
           },
         },
       });
-      if (Platform.OS !== 'web') {
-        Alert.alert('Ожидание подтверждения', 'Откройте приложение кошелька и подтвердите подключение.');
-      }
+      if (uri) await openWallet(uri);
+
       const session = await approval();
-      await signWithSession(sc, session);
-      return;
+      const topic = session.topic;
+      const accounts = session.namespaces.eip155?.accounts || [];
+      const [, chainStr, address] = (accounts[0] || '').split(':');
+      const chainId = Number(chainStr);
+      if (!address) throw new Error('Кошелёк не вернул адрес');
+
+      // 2) nonce + SIWE
+      const { nonce, domain, uri: appUri } = await siweGetNonce(address);
+      const message = buildSiweMessage({ domain, address, uri: appUri, chainId, nonce });
+
+      // 3) подпись
+      const hexMsg = '0x' + Buffer.from(message, 'utf8').toString('hex');
+      const signature: string = await client.request({
+        topic,
+        chainId: `eip155:${chainId}`,
+        request: { method: 'personal_sign', params: [hexMsg, address] },
+      });
+
+      // 4) верификация на сервере → одноразовый email_otp
+      const { email, email_otp } = await siweVerify(message, signature);
+
+      // 5) завершаем вход в Supabase
+      const { data, error } = await supabase.auth.verifyOtp({ email, token: email_otp, type: 'magiclink' });
+      if (error) throw error;
+
+      return data.session;
+    } finally {
+      setLoading(false);
     }
-
-    // 2) нет pairing — создаём новый, получаем wc:uri явно и открываем кошелёк
-    console.log('[WC] create new pairing');
-    const { uri, topic } = await (sc as any).core.pairing.create();
-    console.log('[WC] pairing uri:', uri);
-
-    if (Platform.OS !== 'web') {
-      const opened = await openWalletDeepLink(uri);
-      if (!opened) {
-        Alert.alert(
-          'Кошелёк не найден',
-          'Установите MetaMask/Trust/Rainbow или откройте кошелёк вручную, затем вернитесь в приложение.'
-        );
-      }
-    } else {
-      console.log('[WC] scan QR (uri in console):', uri);
-      Alert.alert('WalletConnect', 'Откройте кошелёк и отсканируйте QR (URI в консоли).');
-    }
-
-    const { approval } = await sc.connect({
-      pairingTopic: topic,
-      optionalNamespaces: {
-        eip155: {
-          methods: ['personal_sign', 'eth_signTypedData', 'eth_sendTransaction'],
-          chains: ['eip155:1'],
-          events: ['accountsChanged', 'chainChanged'],
-        },
-      },
-    });
-
-    let session: SessionTypes.Struct;
-    try {
-      session = await approval();
-    } catch (e: any) {
-      console.warn('[WC] approval error', e?.message || e);
-      if ((e?.message || '').toLowerCase().includes('expired')) {
-        Alert.alert('Время вышло', 'Запрос истёк. Откройте кошелёк и попробуйте ещё раз.');
-      } else {
-        Alert.alert('Ошибка подключения', String(e?.message || e));
-      }
-      throw e;
-    }
-    await signWithSession(sc, session);
   }, []);
 
-  return { signIn };
+  return { loading, signIn };
 }

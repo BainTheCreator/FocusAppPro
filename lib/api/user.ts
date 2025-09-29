@@ -36,7 +36,7 @@ export async function ensureUserProfile(): Promise<EnsureProfileResult> {
     return { created: false, userId: null };
   }
 
-  // 2) Нет записи — создаём (это и есть “регистрация” внутри приложения)
+  // 2) Нет записи — создаём
   if (!existing) {
     const { data: inserted, error: insErr } = await supabase
       .from('user')

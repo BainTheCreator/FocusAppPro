@@ -16,6 +16,7 @@
     "@tanstack/react-query": "^5.89.0",
     "@walletconnect/react-native-compat": "^2.21.9",
     "@walletconnect/sign-client": "^2.21.9",
+    "buffer": "^6.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "expo": "~54.0.0",
@@ -23,6 +24,7 @@
     "expo-constants": "^18.0.9",
     "expo-linear-gradient": "~15.0.7",
     "expo-linking": "~8.0.8",
+    "expo-random": "^14.0.1",
     "expo-status-bar": "~3.0.8",
     "expo-web-browser": "~15.0.7",
     "lucide-react-native": "^0.542.0",
@@ -42,6 +44,7 @@
     "react-native-toast-message": "^2.3.3",
     "react-native-url-polyfill": "^3.0.0",
     "react-native-web": "^0.21.0",
+    "siwe": "^3.0.0",
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
