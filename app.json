@@ -1,25 +1,25 @@
 {
   "expo": {
     "name": "FocusAppPro",
-    "slug": "FocusAppPro",
-    "owner": "ВАШ_EXPO_USERNAME",
+    "slug": "focusapppro",
+    "owner": "jardaxion",
     "scheme": "goalsapp",
-    "android": {
-      "package": "app.goals.focuspro",
-      "edgeToEdgeEnabled": true,
-      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#ffffff" },
-      "intentFilters": [
-        { "action": "VIEW", "data": [{ "scheme": "goalsapp" }], "category": ["BROWSABLE", "DEFAULT"] }
-      ]
-    },
+
     "ios": {
       "bundleIdentifier": "app.goals.focuspro",
       "supportsTablet": true
     },
+
     "plugins": ["expo-web-browser"],
+
     "extra": {
       "EXPO_PUBLIC_SUPABASE_URL": "https://vcptshxtznnmjvrspztp.supabase.co",
-      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_..."
+      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_...",
+
+      "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "198242496021-d7pht2henkckslogu1q8qntf3svbq53n.apps.googleusercontent.com",
+      "EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID": "198242496021-estsci0i38kaolihk63ou8t9ihopn5ns.apps.googleusercontent.com",
+
+      "eas": { "projectId": "YOUR_EAS_PROJECT_ID" }
     }
   }
 }

@@ -1,147 +1,180 @@
-// lib/hooks/useGoogleLogin.ts
-import 'react-native-url-polyfill/auto';
-import { Platform } from 'react-native';
-import * as AuthSession from 'expo-auth-session';
-import { makeRedirectUri } from 'expo-auth-session';
-import * as Linking from 'expo-linking';
-import * as WebBrowser from 'expo-web-browser';
-import Constants from 'expo-constants';
-import { supabase } from '@/lib/supabase';
+// services/googleAuth.ts
+import 'react-native-url-polyfill/auto'
+import { Platform } from 'react-native'
+import * as WebBrowser from 'expo-web-browser'
+import * as AuthSession from 'expo-auth-session'
+import * as Google from 'expo-auth-session/providers/google'
+import Constants from 'expo-constants'
+import { supabase } from '@/lib/supabase'
 
-WebBrowser.maybeCompleteAuthSession();
+WebBrowser.maybeCompleteAuthSession()
 
-type LoginOptions = { debug?: boolean; scheme?: string; path?: string };
-
-function log(dbg: boolean | undefined, ...a: any[]) {
-  if (dbg) console.log('[auth/google]', ...a);
+type LoginOptions = {
+  debug?: boolean
+  prompt?: 'none' | 'consent' | 'select_account' | 'login'
 }
 
-function parseParams(urlStr: string) {
+const EXPO_PROXY_REDIRECT = 'https://auth.expo.dev/@jardaxion/focusapppro'
+const NATIVE_REDIRECT = 'goalsapp://auth'
+
+// утилиты
+const isWeb = Platform.OS === 'web'
+const isExpoGo = Constants.appOwnership === 'expo'
+const expoClientId = (Constants.expoConfig?.extra as any)?.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID ?? process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID
+
+function makeNonce(len = 32) {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let out = ''
+  for (let i = 0; i < len; i++) out += chars[(Math.random() * chars.length) | 0]
+  return out
+}
+function extractIdTokenFromUrl(url?: string): string | undefined {
+  if (!url) return undefined
   try {
-    const u = new URL(urlStr);
-    return {
-      code: u.searchParams.get('code') ?? undefined,
-      error: u.searchParams.get('error_description') || u.searchParams.get('error') || undefined,
-      url: urlStr,
-    };
-  } catch {
-    return { url: urlStr };
-  }
-}
-
-function buildRedirectTo(opts?: LoginOptions) {
-  const path = opts?.path || 'auth/callback';
-  const scheme = opts?.scheme || 'goalsapp';
-
-  if (Platform.OS === 'web') {
-    return window.location.origin; // напр. http://localhost:8081
-  }
-
-  const isExpoGo = Constants.appOwnership === 'expo';
-  if (isExpoGo) {
-    // Expo Go: форсируем proxy → https://auth.expo.dev/@username/slug
-    // TS может ругаться на useProxy — даём as any.
-    return makeRedirectUri({ path, useProxy: true } as any);
-  }
-
-  // Dev Build / Standalone: deeplink
-  return Linking.createURL('/' + path); // -> goalsapp://auth/callback
-}
-
-export async function loginWithGoogle(opts?: LoginOptions) {
-  const dbg = opts?.debug ?? false;
-  const redirectTo = buildRedirectTo(opts);
-  const isWeb = Platform.OS === 'web';
-  const isExpoGo = Constants.appOwnership === 'expo';
-
-  log(dbg, 'ownership:', Constants.appOwnership);
-  log(dbg, 'platform:', Platform.OS);
-  log(dbg, 'redirectTo:', redirectTo);
-
-  // WEB: полный редирект. Supabase сам разберёт URL (detectSessionInUrl: true).
-  if (isWeb) {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo, scopes: 'email profile' }, // без skipBrowserRedirect
-    });
-    if (error) {
-      log(dbg, 'signInWithOAuth error (web):', error);
-      throw error;
+    const u = new URL(url)
+    const q = u.searchParams.get('id_token')
+    if (q) return q
+    const hash = u.hash?.startsWith('#') ? u.hash.slice(1) : u.hash
+    if (hash) {
+      const sp = new URLSearchParams(hash)
+      return sp.get('id_token') ?? undefined
     }
-    return; // произойдёт редирект → Google → обратно на redirectTo
+  } catch {}
+  return undefined
+}
+function extractHashTokens(url?: string): { access_token?: string; refresh_token?: string } {
+  if (!url) return {}
+  const hashPart = url.includes('#') ? url.split('#')[1] : ''
+  if (!hashPart) return {}
+  const sp = new URLSearchParams(hashPart)
+  return { access_token: sp.get('access_token') ?? undefined, refresh_token: sp.get('refresh_token') ?? undefined }
+}
+async function exchangeCodeFlexible(code: string) {
+  // поддержка старой и новой сигнатуры
+  const authAny: any = supabase.auth as any
+  if (typeof authAny.exchangeCodeForSession === 'function') {
+    try {
+      return await authAny.exchangeCodeForSession(code) // старые типы: string
+    } catch {
+      return await authAny.exchangeCodeForSession({ code }) // новые типы: { code }
+    }
+  }
+  // fallback на новые типы
+  // @ts-ignore
+  return await supabase.auth.exchangeCodeForSession({ code })
+}
+
+// WEB (ПК): Supabase OAuth, редирект на текущий origin, сессия подхватится автоматически
+async function loginWeb(debug?: boolean) {
+  const origin = window.location.origin
+  if (debug) console.log('[google][web] redirectTo:', origin)
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: origin, // вернёмся на тот же origin
+      // scopes: 'email profile', // по желанию
+      // По умолчанию skipBrowserRedirect=false — браузер сам уйдёт на Google
+    },
+  })
+  if (error) throw error
+  // дальше произойдёт реальный редирект страницы; сессия подтянется автоматически (detectSessionInUrl: true)
+  return null as any
+}
+
+// iOS в Expo Go: берём id_token у Google и логинимся в Supabase через signInWithIdToken
+async function loginExpoGo(debug?: boolean, prompt?: LoginOptions['prompt']) {
+  if (!expoClientId) throw new Error('Нет EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID')
+  const redirectUri = EXPO_PROXY_REDIRECT
+  const nonce = makeNonce()
+
+  if (debug) {
+    console.log('[google][expo-go] clientId:', expoClientId)
+    console.log('[google][expo-go] redirectUri:', redirectUri)
   }
 
-  // MOBILE: инициируем OAuth, получаем authUrl
-  const { data, error } = await supabase.auth.signInWithOAuth({
+  const request = new AuthSession.AuthRequest({
+    clientId: expoClientId,
+    redirectUri,
+    responseType: AuthSession.ResponseType.IdToken,
+    usePKCE: false, // для id_token PKCE запрещён (иначе invalid_request: code_challenge_method)
+    scopes: ['openid', 'email', 'profile'],
+    extraParams: { prompt: prompt ?? 'select_account', nonce },
+  })
+
+  const result = await (request as any).promptAsync(Google.discovery, { useProxy: true } as any)
+  if (debug) console.log('[google][expo-go] result:', result)
+
+  if (result.type !== 'success') {
+    if (result.type === 'dismiss' || result.type === 'cancel') throw new Error('Вход отменён пользователем')
+    const reason = (result as any)?.params?.error || (result as any)?.error || 'Авторизация не завершена'
+    throw new Error(String(reason))
+  }
+
+  const idToken =
+    extractIdTokenFromUrl((result as any).url) ||
+    (result as any).params?.id_token ||
+    (result as any).authentication?.idToken
+
+  if (!idToken) throw new Error('Не удалось получить id_token от Google')
+
+  const { data, error } = await supabase.auth.signInWithIdToken({
+    provider: 'google',
+    token: idToken,
+    nonce,
+  })
+  if (error) throw error
+  return data.user
+}
+
+// iOS (Dev Client/Standalone): Supabase OAuth с PKCE и deep link goalsapp://auth
+async function loginNativePKCE(debug?: boolean) {
+  const redirectTo = NATIVE_REDIRECT
+  if (debug) console.log('[google][native] redirectTo:', redirectTo)
+
+  const { data: oAuthData, error: oAuthError } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
       redirectTo,
-      skipBrowserRedirect: true, // вернёт data.url
-      scopes: 'email profile',
-    },
-  });
-  if (error) {
-    log(dbg, 'signInWithOAuth error (mobile):', error);
-    throw error;
+      skipBrowserRedirect: true,
+      // flowType: 'pkce' // если типы старые — не указываем, PKCE включится по умолчанию
+    } as any,
+  })
+  if (oAuthError) throw oAuthError
+
+  const result = await WebBrowser.openAuthSessionAsync(oAuthData.url, redirectTo)
+  if (debug) console.log('[google][native] openAuthSession result:', result)
+
+  if (result.type !== 'success' || !result.url) {
+    if (result.type === 'cancel' || result.type === 'dismiss') throw new Error('Вход отменён пользователем')
+    throw new Error('Авторизация не завершена')
   }
 
-  const authUrl = data?.url;
-  if (!authUrl) throw new Error('Не удалось получить URL авторизации');
-
-  try {
-    const u = new URL(authUrl);
-    log(dbg, 'authUrl redirect_to param:', u.searchParams.get('redirect_to'));
-  } catch {}
-  log(dbg, 'authUrl:', authUrl);
-
-  // Expo Go: используем startAsync (работает с proxy лучше всего)
-  if (isExpoGo && typeof (AuthSession as any).startAsync === 'function') {
-    const res = await (AuthSession as any).startAsync({ authUrl, returnUrl: redirectTo });
-    log(dbg, 'startAsync result:', res);
-
-    if (res.type !== 'success' || !res.url) {
-      if (res.type === 'dismiss') {
-        throw new Error('Сессия закрыта. Проверь, что redirectTo = https://auth.expo.dev/@username/slug и этот домен добавлен в Supabase → Redirect URLs.');
-      }
-      if (res.type === 'cancel') throw new Error('Вход отменён пользователем');
-      throw new Error(`Авторизация не завершена (type=${res.type})`);
-    }
-
-    const parsed = parseParams(res.url);
-    log(dbg, 'returned params (expo):', parsed);
-    if (parsed.error) throw new Error('Провайдер вернул ошибку: ' + parsed.error);
-    if (!parsed.code) throw new Error('Код авторизации не получен');
-
-    const { error: ex } = await supabase.auth.exchangeCodeForSession(parsed.code);
-    if (ex) {
-      log(dbg, 'exchangeCodeForSession error:', ex);
-      throw ex;
-    }
-    log(dbg, 'exchangeCodeForSession ok (expo)');
-    return;
+  const returned = new URL(result.url)
+  const code = returned.searchParams.get('code')
+  if (code) {
+    const { data: sessionData, error: exchangeError } = await exchangeCodeFlexible(code)
+    if (exchangeError) throw exchangeError
+    return (sessionData as any).user
   }
 
-  // Dev Build / Standalone: обычная сессия в браузере
-  const res = await WebBrowser.openAuthSessionAsync(authUrl, redirectTo, { showInRecents: true });
-  log(dbg, 'openAuthSessionAsync result:', res);
-
-  if (res.type !== 'success' || !res.url) {
-    if (res.type === 'dismiss') {
-      throw new Error('Сессия закрыта (dismiss). Убедись, что goalsapp://auth/callback добавлен в Supabase → Redirect URLs.');
-    }
-    if (res.type === 'cancel') throw new Error('Вход отменён пользователем');
-    throw new Error(`Авторизация не завершена (type=${res.type})`);
+  // fallback: implicit токены
+  const { access_token, refresh_token } = extractHashTokens(result.url)
+  if (access_token && refresh_token) {
+    const { data: sessionData, error: setError } = await supabase.auth.setSession({ access_token, refresh_token })
+    if (setError) throw setError
+    return sessionData.user
   }
 
-  const parsed = parseParams(res.url);
-  log(dbg, 'returned params (native):', parsed);
-  if (parsed.error) throw new Error('Провайдер вернул ошибку: ' + parsed.error);
-  if (!parsed.code) throw new Error('Код авторизации не получен');
+  throw new Error('Не получили code или токены из редиректа')
+}
 
-  const { error: ex2 } = await supabase.auth.exchangeCodeForSession(parsed.code);
-  if (ex2) {
-    log(dbg, 'exchangeCodeForSession error:', ex2);
-    throw ex2;
-  }
-  log(dbg, 'exchangeCodeForSession ok (native)');
+export async function loginWithGoogle(opts: LoginOptions = {}) {
+  const debug = !!opts.debug
+  if (isWeb) return await loginWeb(debug)
+  if (isExpoGo) return await loginExpoGo(debug, opts.prompt)
+  return await loginNativePKCE(debug)
+}
+
+export async function logout() {
+  await supabase.auth.signOut()
 }
