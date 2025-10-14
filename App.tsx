@@ -1,38 +1,35 @@
 // App.tsx
-import { setupWalletConnectCompat } from '@/lib/wc/setupCompat';
-setupWalletConnectCompat();
+import 'react-native-gesture-handler'
+import React, { useEffect, useMemo, useState } from 'react'
+import { AppState, View, Pressable, Text } from 'react-native'
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import { StatusBar } from 'expo-status-bar'
+import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query'
 
-import 'react-native-gesture-handler';
-import React, { useEffect, useMemo, useState } from 'react';
-import { AppState, View, Pressable, Text } from 'react-native';
-import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { StatusBar } from 'expo-status-bar';
-import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query';
+import { Onboarding } from '@/components/Onboarding'
+import { Dashboard } from '@/components/Dashboard'
+import { CreateGoal } from '@/components/CreateGoal'
+import { Library } from '@/components/Library'
+import { Analytics } from '@/components/Analytics' // не забудь добавить проп isAuthed внутри файла
+import { Premium } from '@/components/Premium'
+import { Teams } from '@/components/Teams'
+import { Login } from '@/components/Login'
+import { Profile } from '@/components/Profile'
 
-import { Onboarding } from '@/components/Onboarding';
-import { Dashboard } from '@/components/Dashboard';
-import { CreateGoal } from '@/components/CreateGoal';
-import { Library } from '@/components/Library';
-import { Analytics } from '@/components/Analytics'; // не забудь добавить проп isAuthed внутри файла
-import { Premium } from '@/components/Premium';
-import { Teams } from '@/components/Teams';
-import { Login } from '@/components/Login';
-import { Profile } from '@/components/Profile';
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { Toaster } from '@/components/ui/toaster'
 
-import { TooltipProvider } from '@/components/ui/tooltip';
-import { Toaster } from '@/components/ui/toaster';
+import { Home, TrendingUp, Crown, Users, User2, Target as TargetIcon, Sparkles, BookOpen, X as CloseIcon } from 'lucide-react-native'
+import { GoalsProvider, useGoals } from '@/state/goals'
 
-import { Home, TrendingUp, Crown, Users, User2, Target as TargetIcon, Sparkles, BookOpen, X as CloseIcon } from 'lucide-react-native';
-import { GoalsProvider, useGoals } from '@/state/goals';
-
-import './global.css';
-import { supabase } from '@/lib/supabase';
-import { testOpenTelegramPage } from './auth/testOpenTelegramPage';
-import { loginWithTelegram } from './lib/hooks/useTelegramLogin';
-import { loginWithGoogle } from '@/lib/hooks/useGoogleLogin';
-import { ensureUserProfile } from '@/lib/api/user';
-import { useWalletLoginWC } from '@/lib/hooks/useWalletLoginWC';
+import './global.css'
+import { supabase } from '@/lib/supabase'
+import { testOpenTelegramPage } from './auth/testOpenTelegramPage'
+// УДАЛЕНО: import { loginWithTelegram } from './lib/hooks/useTelegramLogin' — теперь динамический импорт в handleLoginWith
+import { loginWithGoogle } from '@/lib/hooks/useGoogleLogin'
+import { ensureUserProfile } from '@/lib/api/user'
+import { useWalletLoginWC } from '@/lib/hooks/useWalletLoginWC'
 
 type Screen =
   | 'onboarding'
@@ -43,38 +40,38 @@ type Screen =
   | 'analytics'
   | 'teams'
   | 'premium'
-  | 'profile';
+  | 'profile'
 
-type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'web3' | 'email';
+type Provider = 'telegram' | 'qr' | 'apple' | 'google' | 'web3' | 'email'
 
-const queryClient = new QueryClient();
-const FORCE_LOGIN = false;
+const queryClient = new QueryClient()
+const FORCE_LOGIN = false
 
 function useReactQueryFocus() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      focusManager.setFocused(state === 'active');
-    });
-    return () => sub.remove();
-  }, []);
+      focusManager.setFocused(state === 'active')
+    })
+    return () => sub.remove()
+  }, [])
 }
 
-type BottomTabsProps = { current: Screen; onChange: (s: Screen) => void };
+type BottomTabsProps = { current: Screen; onChange: (s: Screen) => void }
 
 function BottomTabs({ current, onChange }: BottomTabsProps) {
-  const insets = useSafeAreaInsets();
+  const insets = useSafeAreaInsets()
   const tabs = [
     { key: 'dashboard' as Screen, label: 'Главная', Icon: Home },
     { key: 'analytics' as Screen, label: 'Статистика', Icon: TrendingUp },
     { key: 'teams' as Screen, label: 'Команды', Icon: Users },
     { key: 'premium' as Screen, label: 'Магазин', Icon: Crown },
     { key: 'profile' as Screen, label: 'Профиль', Icon: User2 },
-  ];
+  ]
   return (
     <View style={{ paddingBottom: (insets?.bottom ?? 0) + 8, paddingTop: 8 }} {...({ className: 'px-2 border-t border-border bg-card/90' } as any)}>
       <View {...({ className: 'flex-row items-center justify-between' } as any)}>
         {tabs.map(({ key, label, Icon }) => {
-          const active = current === key;
+          const active = current === key
           return (
             <Pressable
               key={key}
@@ -84,11 +81,11 @@ function BottomTabs({ current, onChange }: BottomTabsProps) {
               <Icon size={18} color={active ? '#35D07F' : '#FFFFFF'} />
               <Text {...({ className: 'mt-1 text-xs ' + (active ? 'text-primary font-medium' : 'text-foreground') } as any)}>{label}</Text>
             </Pressable>
-          );
+          )
         })}
       </View>
     </View>
-  );
+  )
 }
 
 function PostSignupTutorialOverlay({ onClose }: { onClose: () => void }) {
@@ -128,116 +125,119 @@ function PostSignupTutorialOverlay({ onClose }: { onClose: () => void }) {
         </Pressable>
       </View>
     </View>
-  );
+  )
 }
 
 function AppShell() {
-  const qc = useQueryClient();
+  const qc = useQueryClient()
 
-  const [booted, setBooted] = useState(false);
-  const [isAuthed, setIsAuthed] = useState(false);
-  const [currentScreen, setCurrentScreen] = useState<Screen>('onboarding');
-  const [onboardingDone, setOnboardingDone] = useState(false);
-  const [showSignupTutorial, setShowSignupTutorial] = useState(false);
+  const [booted, setBooted] = useState(false)
+  const [isAuthed, setIsAuthed] = useState(false)
+  const [currentScreen, setCurrentScreen] = useState<Screen>('onboarding')
+  const [onboardingDone, setOnboardingDone] = useState(false)
+  const [showSignupTutorial, setShowSignupTutorial] = useState(false)
 
-  const { addGoal } = useGoals?.() || { addGoal: async () => {} };
-  const { signIn: signInWallet } = useWalletLoginWC();
+  const { addGoal } = useGoals?.() || { addGoal: async () => {} }
+  const { signIn: signInWallet } = useWalletLoginWC()
 
   useEffect(() => {
     (async () => {
       try {
-        const sess = await supabase.auth.getSession();
-        const authed = !!sess.data.session;
-        setIsAuthed(authed);
+        const sess = await supabase.auth.getSession()
+        const authed = !!sess.data.session
+        setIsAuthed(authed)
 
-        let initial: Screen;
-        if (FORCE_LOGIN) initial = 'login';
-        else if (!authed && !onboardingDone) initial = 'onboarding';
-        else if (!authed) initial = 'login';
-        else initial = 'dashboard';
-        setCurrentScreen(initial);
+        let initial: Screen
+        if (FORCE_LOGIN) initial = 'login'
+        else if (!authed && !onboardingDone) initial = 'onboarding'
+        else if (!authed) initial = 'login'
+        else initial = 'dashboard'
+        setCurrentScreen(initial)
 
-        // ВАЖНО: если пользователь уже залогинен (возврат в приложение),
-        // создадим/обновим профиль сразу.
         if (authed) {
           try {
-            const res = await ensureUserProfile();
-            if (res.created) setShowSignupTutorial(true);
+            const res = await ensureUserProfile()
+            if (res.created) setShowSignupTutorial(true)
           } catch (e) {
-            console.warn('ensureUserProfile on boot failed', e);
+            console.warn('ensureUserProfile on boot failed', e)
           }
         }
       } catch {
-        setIsAuthed(false);
-        setCurrentScreen('onboarding');
+        setIsAuthed(false)
+        setCurrentScreen('onboarding')
       } finally {
-        setBooted(true);
+        setBooted(true)
       }
-    })();
+    })()
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
-      setIsAuthed(!!session);
+      setIsAuthed(!!session)
 
       if (event === 'SIGNED_IN') {
-        // Создаём/обновляем профиль сразу после входа
-        let created = false;
+        let created = false
         try {
-          const res = await ensureUserProfile();
-          created = !!res.created;
+          const res = await ensureUserProfile()
+          created = !!res.created
         } catch (e) {
-          console.warn('ensureUserProfile on SIGNED_IN failed', e);
+          console.warn('ensureUserProfile on SIGNED_IN failed', e)
         }
 
-        // перезапускаем данные
-        qc.invalidateQueries({ queryKey: ['goals'] });
-        qc.invalidateQueries({ queryKey: ['goal_templates'] });
-        qc.invalidateQueries({ queryKey: ['teams'] });
-        qc.invalidateQueries({ queryKey: ['me'] });
+        qc.invalidateQueries({ queryKey: ['goals'] })
+        qc.invalidateQueries({ queryKey: ['goal_templates'] })
+        qc.invalidateQueries({ queryKey: ['teams'] })
+        qc.invalidateQueries({ queryKey: ['me'] })
 
-        setCurrentScreen('dashboard');
-        if (created) setShowSignupTutorial(true);
+        setCurrentScreen('dashboard')
+        if (created) setShowSignupTutorial(true)
       }
       if (event === 'SIGNED_OUT') {
-        setOnboardingDone(false);
-        setCurrentScreen('onboarding');
+        setOnboardingDone(false)
+        setCurrentScreen('onboarding')
       }
-    });
-    return () => sub.subscription.unsubscribe();
-  }, [onboardingDone, qc]);
+    })
+    return () => sub.subscription.unsubscribe()
+  }, [onboardingDone, qc])
 
-  // “надёжный” экран
   const effectiveScreen: Screen = useMemo(() => {
-    if (!booted) return 'onboarding';
-    if (!isAuthed) return onboardingDone ? 'login' : 'onboarding';
-    const allowed: Screen[] = ['dashboard', 'create-goal', 'library', 'analytics', 'teams', 'premium', 'profile'];
-    return allowed.includes(currentScreen) ? currentScreen : 'dashboard';
-  }, [booted, isAuthed, onboardingDone, currentScreen]);
+    if (!booted) return 'onboarding'
+    if (!isAuthed) return onboardingDone ? 'login' : 'onboarding'
+    const allowed: Screen[] = ['dashboard', 'create-goal', 'library', 'analytics', 'teams', 'premium', 'profile']
+    return allowed.includes(currentScreen) ? currentScreen : 'dashboard'
+  }, [booted, isAuthed, onboardingDone, currentScreen])
 
-  const showTabs = !['onboarding', 'login', 'create-goal'].includes(effectiveScreen);
-  const extraBottomPadding = showTabs ? 100 : 0;
+  const showTabs = !['onboarding', 'login', 'create-goal'].includes(effectiveScreen)
+  const extraBottomPadding = showTabs ? 100 : 0
 
   const handleOnboardingComplete = () => {
-    setOnboardingDone(true);
-    setCurrentScreen('login');
-  };
-  const handleCreateGoal = () => setCurrentScreen('create-goal');
-  const handleGoalSaved = (draft: any) => { addGoal?.(draft); setCurrentScreen('dashboard'); };
-  const handleBack = () => setCurrentScreen('dashboard');
-  const loginOnSkip = () => setCurrentScreen('onboarding');
+    setOnboardingDone(true)
+    setCurrentScreen('login')
+  }
+  const handleCreateGoal = () => setCurrentScreen('create-goal')
+  const handleGoalSaved = (draft: any) => { addGoal?.(draft); setCurrentScreen('dashboard') }
+  const handleBack = () => setCurrentScreen('dashboard')
+  const loginOnSkip = () => setCurrentScreen('onboarding')
 
   const handleLoginWith = async (provider: Provider) => {
-    if (provider === 'qr')       { try { await testOpenTelegramPage(); } catch (e) { console.warn(e); } return; }
-    if (provider === 'telegram') { try { await loginWithTelegram(); } catch (e) { console.warn(e); } return; }
-    if (provider === 'google')   { try { await loginWithGoogle({ debug: true }); } catch (e) { console.warn(e); } return; }
-    if (provider === 'web3')     { try { await signInWallet(); } catch (e) { console.warn(e); } return; }
-  };
+    if (provider === 'qr')       { try { await testOpenTelegramPage() } catch (e) { console.warn(e) } return }
+    if (provider === 'telegram') {
+      try {
+        const { loginWithTelegram } = await import('@/lib/hooks/useTelegramLogin') // динамический импорт
+        await loginWithTelegram()
+      } catch (e) {
+        console.warn(e)
+      }
+      return
+    }
+    if (provider === 'google')   { try { await loginWithGoogle({ debug: true }) } catch (e) { console.warn(e) } return }
+    if (provider === 'web3')     { try { await signInWallet() } catch (e) { console.warn(e) } return }
+  }
 
   const handleLogout = async () => {
-    try { await supabase.auth.signOut(); } catch {}
-    setIsAuthed(false);
-    setOnboardingDone(false);
-    setCurrentScreen('onboarding');
-  };
+    try { await supabase.auth.signOut() } catch {}
+    setIsAuthed(false)
+    setOnboardingDone(false)
+    setCurrentScreen('onboarding')
+  }
 
   if (!booted) {
     return (
@@ -245,7 +245,7 @@ function AppShell() {
         <StatusBar style="light" translucent backgroundColor="transparent" />
         <Text {...({ className: 'text-foreground' } as any)}>Загрузка…</Text>
       </SafeAreaView>
-    );
+    )
   }
 
   return (
@@ -278,7 +278,7 @@ function AppShell() {
         ) : effectiveScreen === 'teams' ? (
           <Teams isAuthed={isAuthed} onBack={handleBack} extraBottomPadding={extraBottomPadding} />
         ) : effectiveScreen === 'premium' ? (
-          <Premium onSubscribe={(planId) => { console.log('Подписка на план:', planId); }} extraBottomPadding={extraBottomPadding !== 0 ? extraBottomPadding - 100 : 0} />
+          <Premium onSubscribe={(planId) => { console.log('Подписка на план:', planId) }} extraBottomPadding={extraBottomPadding !== 0 ? extraBottomPadding - 100 : 0} />
         ) : effectiveScreen === 'profile' ? (
           <Profile isAuthed={isAuthed} onLogout={handleLogout} extraBottomPadding={extraBottomPadding} />
         ) : null}
@@ -290,11 +290,21 @@ function AppShell() {
 
       <Toaster />
     </SafeAreaView>
-  );
+  )
 }
 
 export default function App() {
-  useReactQueryFocus();
+  useReactQueryFocus()
+
+  // Инициализация WalletConnect — динамически, чтобы не рушить web при импорте
+  useEffect(() => {
+    let mounted = true
+    import('@/lib/wc/setupCompat')
+      .then((m) => mounted && m.setupWalletConnectCompat?.())
+      .catch((e) => console.warn('setupWalletConnectCompat failed (ok на web):', e))
+    return () => { mounted = false }
+  }, [])
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={200}>
@@ -307,5 +317,5 @@ export default function App() {
         </SafeAreaProvider>
       </TooltipProvider>
     </QueryClientProvider>
-  );
+  )
 }

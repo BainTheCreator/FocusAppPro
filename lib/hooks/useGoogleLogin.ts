@@ -1,33 +1,83 @@
-// services/googleAuth.ts
+// hooks/useGoogleLogin.ts
 import 'react-native-url-polyfill/auto'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Platform } from 'react-native'
-import * as WebBrowser from 'expo-web-browser'
-import * as AuthSession from 'expo-auth-session'
-import * as Google from 'expo-auth-session/providers/google'
-import Constants from 'expo-constants'
+import type { User } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 
-WebBrowser.maybeCompleteAuthSession()
+type Prompt = 'none' | 'consent' | 'select_account' | 'login'
 
-type LoginOptions = {
+export type UseGoogleLoginOptions = {
+  auto?: boolean
+  autoSilent?: boolean
   debug?: boolean
-  prompt?: 'none' | 'consent' | 'select_account' | 'login'
+  loginHint?: string
 }
 
-const EXPO_PROXY_REDIRECT = 'https://auth.expo.dev/@jardaxion/focusapppro'
-const NATIVE_REDIRECT = 'goalsapp://auth'
+export type UseGoogleLoginReturn = {
+  user: User | null
+  loading: boolean
+  error: string | null
+  loginSilent: () => Promise<User | null>
+  loginInteractive: (prompt?: Prompt) => Promise<User | null>
+  ensureLoggedIn: () => Promise<User | null>
+  logout: () => Promise<void>
+  triedSilent: boolean
+}
 
-// утилиты
+export type LoginWithGoogleOptions = {
+  debug?: boolean
+  prompt?: Prompt
+  loginHint?: string
+  trySilentFirst?: boolean
+}
+
 const isWeb = Platform.OS === 'web'
-const isExpoGo = Constants.appOwnership === 'expo'
-const expoClientId = (Constants.expoConfig?.extra as any)?.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID ?? process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID
 
-function makeNonce(len = 32) {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  let out = ''
-  for (let i = 0; i < len; i++) out += chars[(Math.random() * chars.length) | 0]
-  return out
+// ---------- утилиты без expo-зависимостей ----------
+async function getAppOwnership(): Promise<'expo' | 'standalone' | 'guest' | undefined> {
+  try {
+    const Constants: any = (await import('expo-constants')).default
+    return Constants?.appOwnership
+  } catch {
+    return undefined
+  }
 }
+
+async function getExpoClientId(): Promise<string | undefined> {
+  const env = (typeof process !== 'undefined' ? (process as any).env : undefined) || {}
+  if (env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID) return env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID as string
+  try {
+    const Constants: any = (await import('expo-constants')).default
+    return (Constants?.expoConfig?.extra as any)?.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID
+  } catch {
+    return undefined
+  }
+}
+
+async function makeNonce(len = 32): Promise<string> {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  if (globalThis.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(len)
+    globalThis.crypto.getRandomValues(bytes)
+    let out = ''
+    for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length]
+    return out
+  }
+  try {
+    const Random: any = await import('expo-random')
+    const bytes: Uint8Array = Random.getRandomBytes(len)
+    let out = ''
+    for (let i = 0; i < len; i++) out += alphabet[bytes[i] % alphabet.length]
+    return out
+  } catch {
+    // очень редко: псевдорандом
+    let out = ''
+    for (let i = 0; i < len; i++) out += alphabet[(Math.random() * alphabet.length) | 0]
+    return out
+  }
+}
+
 function extractIdTokenFromUrl(url?: string): string | undefined {
   if (!url) return undefined
   try {
@@ -42,66 +92,80 @@ function extractIdTokenFromUrl(url?: string): string | undefined {
   } catch {}
   return undefined
 }
+
 function extractHashTokens(url?: string): { access_token?: string; refresh_token?: string } {
   if (!url) return {}
   const hashPart = url.includes('#') ? url.split('#')[1] : ''
   if (!hashPart) return {}
   const sp = new URLSearchParams(hashPart)
-  return { access_token: sp.get('access_token') ?? undefined, refresh_token: sp.get('refresh_token') ?? undefined }
+  return {
+    access_token: sp.get('access_token') ?? undefined,
+    refresh_token: sp.get('refresh_token') ?? undefined,
+  }
 }
+
 async function exchangeCodeFlexible(code: string) {
-  // поддержка старой и новой сигнатуры
   const authAny: any = supabase.auth as any
   if (typeof authAny.exchangeCodeForSession === 'function') {
     try {
-      return await authAny.exchangeCodeForSession(code) // старые типы: string
+      return await authAny.exchangeCodeForSession(code)
     } catch {
-      return await authAny.exchangeCodeForSession({ code }) // новые типы: { code }
+      return await authAny.exchangeCodeForSession({ code })
     }
   }
-  // fallback на новые типы
   // @ts-ignore
   return await supabase.auth.exchangeCodeForSession({ code })
 }
 
-// WEB (ПК): Supabase OAuth, редирект на текущий origin, сессия подхватится автоматически
-async function loginWeb(debug?: boolean) {
-  const origin = window.location.origin
-  if (debug) console.log('[google][web] redirectTo:', origin)
+// ---------- реализации платформ ----------
+
+// Web: редирект на Google
+async function loginWeb(debug?: boolean, prompt?: Prompt): Promise<User | null> {
+  const origin = typeof window !== 'undefined' ? window.location.origin : undefined
+  if (debug) console.log('[google][web] redirectTo:', origin, 'prompt:', prompt)
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: origin, // вернёмся на тот же origin
-      // scopes: 'email profile', // по желанию
-      // По умолчанию skipBrowserRedirect=false — браузер сам уйдёт на Google
-    },
+      redirectTo: origin,
+      queryParams: prompt ? { prompt } : undefined,
+    } as any,
   })
   if (error) throw error
-  // дальше произойдёт реальный редирект страницы; сессия подтянется автоматически (detectSessionInUrl: true)
-  return null as any
+  return null
 }
 
-// iOS в Expo Go: берём id_token у Google и логинимся в Supabase через signInWithIdToken
-async function loginExpoGo(debug?: boolean, prompt?: LoginOptions['prompt']) {
-  if (!expoClientId) throw new Error('Нет EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID')
-  const redirectUri = EXPO_PROXY_REDIRECT
-  const nonce = makeNonce()
+// Expo Go: id_token → Supabase (ленивые импорты expo-* внутри)
+async function loginExpoGo(debug?: boolean, prompt: Prompt = 'none', loginHint?: string): Promise<User> {
+  const clientId = await getExpoClientId()
+  if (!clientId) throw new Error('Нет EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID (expo.extra или env)')
+
+  const AuthSession: any = await import('expo-auth-session')
+  const Google: any = await import('expo-auth-session/providers/google')
+  const WebBrowser: any = await import('expo-web-browser')
+  WebBrowser.maybeCompleteAuthSession()
+
+  const redirectUri = AuthSession.makeRedirectUri()
+  const nonce = await makeNonce()
 
   if (debug) {
-    console.log('[google][expo-go] clientId:', expoClientId)
+    console.log('[google][expo-go] clientId:', clientId)
     console.log('[google][expo-go] redirectUri:', redirectUri)
   }
 
   const request = new AuthSession.AuthRequest({
-    clientId: expoClientId,
+    clientId,
     redirectUri,
     responseType: AuthSession.ResponseType.IdToken,
-    usePKCE: false, // для id_token PKCE запрещён (иначе invalid_request: code_challenge_method)
+    usePKCE: false,
     scopes: ['openid', 'email', 'profile'],
-    extraParams: { prompt: prompt ?? 'select_account', nonce },
+    extraParams: { prompt, nonce, ...(loginHint ? { login_hint: loginHint } : {}) },
   })
 
-  const result = await (request as any).promptAsync(Google.discovery, { useProxy: true } as any)
+  const result = await (request as any).promptAsync(Google.discovery, {
+    useProxy: true,
+    preferEphemeralSession: false,
+  } as any)
+
   if (debug) console.log('[google][expo-go] result:', result)
 
   if (result.type !== 'success') {
@@ -126,17 +190,24 @@ async function loginExpoGo(debug?: boolean, prompt?: LoginOptions['prompt']) {
   return data.user
 }
 
-// iOS (Dev Client/Standalone): Supabase OAuth с PKCE и deep link goalsapp://auth
-async function loginNativePKCE(debug?: boolean) {
-  const redirectTo = NATIVE_REDIRECT
-  if (debug) console.log('[google][native] redirectTo:', redirectTo)
+// Dev Client / Standalone: OAuth PKCE + deep link
+async function loginNativePKCE(debug?: boolean, prompt: Prompt = 'select_account', loginHint?: string): Promise<User> {
+  const AuthSession: any = await import('expo-auth-session')
+  const WebBrowser: any = await import('expo-web-browser')
+  WebBrowser.maybeCompleteAuthSession()
+
+  const redirectTo = AuthSession.makeRedirectUri()
+  if (debug) console.log('[google][native] redirectTo:', redirectTo, 'prompt:', prompt)
 
   const { data: oAuthData, error: oAuthError } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
       redirectTo,
       skipBrowserRedirect: true,
-      // flowType: 'pkce' // если типы старые — не указываем, PKCE включится по умолчанию
+      queryParams: {
+        ...(prompt ? { prompt } : {}),
+        ...(loginHint ? { login_hint: loginHint } : {}),
+      },
     } as any,
   })
   if (oAuthError) throw oAuthError
@@ -157,7 +228,6 @@ async function loginNativePKCE(debug?: boolean) {
     return (sessionData as any).user
   }
 
-  // fallback: implicit токены
   const { access_token, refresh_token } = extractHashTokens(result.url)
   if (access_token && refresh_token) {
     const { data: sessionData, error: setError } = await supabase.auth.setSession({ access_token, refresh_token })
@@ -168,13 +238,178 @@ async function loginNativePKCE(debug?: boolean) {
   throw new Error('Не получили code или токены из редиректа')
 }
 
-export async function loginWithGoogle(opts: LoginOptions = {}) {
-  const debug = !!opts.debug
-  if (isWeb) return await loginWeb(debug)
-  if (isExpoGo) return await loginExpoGo(debug, opts.prompt)
-  return await loginNativePKCE(debug)
+// ---------- публичная функция, которую зовёшь из App.tsx ----------
+
+export async function loginWithGoogle(opts: LoginWithGoogleOptions = {}): Promise<User | null> {
+  const { debug = false, prompt, loginHint, trySilentFirst = true } = opts
+
+  if (isWeb) {
+    return await loginWeb(debug, prompt)
+  }
+
+  const ownership = await getAppOwnership()
+  const isExpoGo = ownership === 'expo'
+
+  if (isExpoGo) {
+    if (trySilentFirst) {
+      try {
+        return await loginExpoGo(debug, 'none', loginHint)
+      } catch (e) {
+        if (debug) console.log('[google] silent (Expo Go) failed → interactive:', e)
+        return await loginExpoGo(debug, prompt ?? 'select_account', loginHint)
+      }
+    }
+    return await loginExpoGo(debug, prompt ?? 'select_account', loginHint)
+  }
+
+  // Dev Client / Standalone
+  if (trySilentFirst) {
+    try {
+      return await loginNativePKCE(debug, 'none', loginHint)
+    } catch (e) {
+      if (debug) console.log('[google] silent (native) failed → interactive:', e)
+      return await loginNativePKCE(debug, prompt ?? 'select_account', loginHint)
+    }
+  }
+  return await loginNativePKCE(debug, prompt ?? 'select_account', loginHint)
 }
 
-export async function logout() {
-  await supabase.auth.signOut()
+// ---------- хук ----------
+
+function parseError(e: unknown): string {
+  if (!e) return 'Unknown error'
+  if (typeof e === 'string') return e
+  if (e instanceof Error) return e.message
+  try { return JSON.stringify(e) } catch { return String(e) }
+}
+
+export function useGoogleLogin(options: UseGoogleLoginOptions = {}): UseGoogleLoginReturn {
+  const { auto = true, autoSilent = true, debug = false, loginHint } = options
+
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string | null>(null)
+  const triedSilentRef = useRef(false)
+
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (debug) console.log('[auth] event:', _event, 'user:', session?.user?.id)
+      setUser(session?.user ?? null)
+      setLoading(false)
+    })
+    return () => { data.subscription.unsubscribe() }
+  }, [debug])
+
+  useEffect(() => {
+    let cancelled = false
+    const init = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (cancelled) return
+
+        if (data.session?.user) {
+          setUser(data.session.user)
+          return
+        }
+
+        // тихий вход только в Expo Go
+        if (auto && autoSilent && !triedSilentRef.current) {
+          const ownership = await getAppOwnership()
+          if (ownership === 'expo') {
+            triedSilentRef.current = true
+            try {
+              if (debug) console.log('[google] trying silent login (prompt=none) on Expo Go')
+              await loginExpoGo(debug, 'none', loginHint)
+            } catch (e) {
+              if (debug) console.log('[google] silent login failed:', e)
+              setError(parseError(e))
+            }
+          }
+        }
+      } catch (e) {
+        setError(parseError(e))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    init()
+    return () => { cancelled = true }
+  }, [auto, autoSilent, loginHint, debug])
+
+  const refreshCurrentUser = useCallback(async (): Promise<User | null> => {
+    try {
+      const { data } = await supabase.auth.getUser()
+      const u = data.user ?? null
+      setUser(u)
+      return u
+    } catch (e) {
+      setError(parseError(e))
+      return null
+    }
+  }, [])
+
+  const loginSilent = useCallback(async (): Promise<User | null> => {
+    setLoading(true); setError(null); triedSilentRef.current = true
+    try {
+      if (isWeb) throw new Error('Silent login на Web приведёт к редиректу — используйте loginInteractive()')
+      const ownership = await getAppOwnership()
+      if (ownership === 'expo') {
+        await loginExpoGo(debug, 'none', loginHint)
+      } else {
+        await loginNativePKCE(debug, 'none', loginHint)
+      }
+      return await refreshCurrentUser()
+    } catch (e) {
+      setError(parseError(e)); throw e
+    } finally {
+      setLoading(false)
+    }
+  }, [debug, loginHint, refreshCurrentUser])
+
+  const loginInteractive = useCallback(
+    async (prompt?: Prompt): Promise<User | null> => {
+      setLoading(true); setError(null)
+      try {
+        if (isWeb) {
+          await loginWeb(debug, prompt); return null
+        }
+        const ownership = await getAppOwnership()
+        if (ownership === 'expo') {
+          await loginExpoGo(debug, prompt ?? 'select_account', loginHint)
+        } else {
+          await loginNativePKCE(debug, prompt ?? 'select_account', loginHint)
+        }
+        return await refreshCurrentUser()
+      } catch (e) {
+        setError(parseError(e)); throw e
+      } finally {
+        setLoading(false)
+      }
+    }, [debug, loginHint, refreshCurrentUser]
+  )
+
+  const ensureLoggedIn = useCallback(async (): Promise<User | null> => {
+    setError(null); setLoading(true)
+    try {
+      const { data } = await supabase.auth.getSession()
+      if (data.session?.user) { setUser(data.session.user); return data.session.user }
+      if (!triedSilentRef.current && (await getAppOwnership()) === 'expo') {
+        try { return await loginSilent() } catch {}
+      }
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }, [loginSilent])
+
+  const logout = useCallback(async () => {
+    setLoading(true); setError(null)
+    try { await supabase.auth.signOut(); setUser(null) }
+    catch (e) { setError(parseError(e)); throw e }
+    finally { setLoading(false) }
+  }, [])
+
+  return { user, loading, error, loginSilent, loginInteractive, ensureLoggedIn, logout, triedSilent: triedSilentRef.current }
 }
